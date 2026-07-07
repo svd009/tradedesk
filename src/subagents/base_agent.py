@@ -126,9 +126,13 @@ class BaseAgent:
         Strips markdown code fences if present.
         """
         text = raw.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+        # Strip ```json ... ``` or ``` ... ``` fences
+        if "```" in text:
+            import re
+            # Extract content between first ``` and last ```
+            match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+            if match:
+                text = match.group(1)
         try:
             return json.loads(text)
         except json.JSONDecodeError:
