@@ -33,6 +33,9 @@ Context isolation proof:
 """
 
 import time
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from src.mcp_server.market_tools import MarketToolExecutor
 from src.subagents.news_agent import NewsAgent
