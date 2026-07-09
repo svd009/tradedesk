@@ -2,7 +2,31 @@
 
 > **Trading & Fintech Edition** | Built with Claude API — 5 Parallel Subagents, Bedrock-Ready Architecture, Streamlit Web App, Extended Thinking Synthesis
 
-**Status: Complete and deployable.**
+**Status: Complete, deployed, and verified with a real NVDA analysis.**
+
+---
+
+## Live Demo
+
+**[Launch TradeDesk →](https://svd009-tradedesk.streamlit.app)**
+
+Enter any ticker and get a full research report in ~20 seconds.
+
+---
+
+## Verified Results — Real NVDA Analysis
+
+| Dimension | Signal | Detail |
+|---|---|---|
+| News Sentiment | BULLISH | Strong earnings, AI demand narrative |
+| Fundamental Health | STRONG (8.2/10) | 85% revenue growth, 63% net margins |
+| Technical Signal | BEARISH | Below SMA50, MACD bearish, downtrend |
+| Macro Environment | FAVORABLE | AI infrastructure spending cycle intact |
+| Portfolio Fit | POOR | 35% existing concentration in a tech-heavy book |
+
+**Final recommendation: HOLD (68% confidence, 6.1/10)**
+Synthesis resolved the fundamental vs. technical conflict: trim to 20% position, re-evaluate after technical stabilization above SMA50 or Q2 earnings confirmation.
+**Quality score: 10.0/10 PASSED | Completed in 16.8s | Extended thinking: 1,268 chars**
 
 ---
 
