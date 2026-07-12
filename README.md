@@ -1,4 +1,4 @@
-# TradeDesk — Multi-Subagent Equity Research & Portfolio Intelligence
+# TradeDesk: Multi-Subagent Equity Research & Portfolio Intelligence
 
 > **Trading & Fintech Edition** | Built with Claude API — 5 Parallel Subagents, Bedrock-Ready Architecture, Streamlit Web App, Extended Thinking Synthesis
 
@@ -14,7 +14,7 @@ Enter any ticker and get a full research report in ~20 seconds.
 
 ---
 
-## Verified Results — Real NVDA Analysis
+## Verified Results; Real NVDA Analysis
 
 | Dimension | Signal | Detail |
 |---|---|---|
@@ -34,7 +34,7 @@ Synthesis resolved the fundamental vs. technical conflict: trim to 20% position,
 
 TradeDesk runs 5 specialized AI research subagents in parallel on any stock ticker, synthesizes their findings using Claude Sonnet with extended thinking, and delivers a structured investment recommendation with confidence score, bull/bear case, and conflict resolution trace.
 
-It's an equity research assistant — not an autonomous trading bot. The system produces reasoned recommendations; a human decides whether to act.
+It's an equity research assistant, not an autonomous trading bot. The system produces reasoned recommendations; a human decides whether to act.
 
 ---
 
@@ -143,9 +143,3 @@ tradedesk/
 - [boto3](https://boto3.amazonaws.com) — AWS Bedrock (ready to activate)
 
 ---
-
-## Author
-
-**Suujay Dhhoka** — M.S. Electrical & Computer Engineering, Rutgers University (May 2026)
-Third project in a series applying Anthropic Academy coursework to real fintech problems.
-FinGuard (compliance) → ReconcileAgent (reconciliation) → TradeDesk (equity research).
