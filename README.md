@@ -1,6 +1,6 @@
 # TradeDesk: Multi-Subagent Equity Research & Portfolio Intelligence
 
-> **Trading & Fintech Edition** | Built with Claude API — 5 Parallel Subagents, Bedrock-Ready Architecture, Streamlit Web App, Extended Thinking Synthesis
+> **Trading & Fintech Edition** | Built with Claude API:- 5 Parallel Subagents, Bedrock-Ready Architecture, Streamlit Web App, Extended Thinking Synthesis
 
 **Status: Complete, deployed, and verified with a real NVDA & TSLA analysis.**
 
