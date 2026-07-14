@@ -8,7 +8,7 @@
 
 ## Live Demo
 
-**[Launch TradeDesk →](https://svd009-tradedesk.streamlit.app)**
+**[Launch TradeDesk →](https://tradedesk-svd009.streamlit.app/)**
 
 Enter any ticker and get a full research report in ~20 seconds.
 
