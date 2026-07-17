@@ -60,7 +60,7 @@ TradeDesk Orchestrator
 ```
 
 **Why parallel subagents instead of one big prompt?**
-Each subagent has an isolated context window, its own tool access, and its own domain focus. Running them concurrently cuts analysis time by ~5x vs sequential chaining. When signals conflict (e.g. strong fundamentals but bearish technicals), the synthesis agent receives independent evidence streams and reasons through the disagreement explicitly using extended thinking — not a single model's surface-level opinion.
+Each subagent has an isolated context window, its own tool access, and its own domain focus. Running them concurrently cuts analysis time by ~5x vs sequential chaining. When signals conflict (e.g. strong fundamentals but bearish technicals), the synthesis agent receives independent evidence streams and reasons through the disagreement explicitly using extended thinking, not a single model's surface-level opinion.
 
 ---
 
