@@ -32,9 +32,11 @@ MODEL_FAST      = "claude-haiku-4-5"
 MODEL_REASONING = "claude-sonnet-4-6"
 
 # Bedrock model IDs (used when MODEL_PROVIDER = "bedrock")
-# Exact IDs as shown on each model's detail page in the Bedrock console.
-BEDROCK_MODEL_FAST      = "anthropic.claude-haiku-4-5-20251001-v1:0"
-BEDROCK_MODEL_REASONING = "anthropic.claude-sonnet-4-6"
+# These are cross-region inference profile IDs, not raw model IDs — Bedrock
+# rejects on-demand InvokeModel calls to the raw model ID for these newer
+# Claude models and requires an inference profile instead.
+BEDROCK_MODEL_FAST      = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_MODEL_REASONING = "global.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
