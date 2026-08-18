@@ -16,6 +16,7 @@ os.environ["PYTHONPATH"] = os.path.dirname(os.path.abspath(__file__))
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+from plotly.subplots import make_subplots
 import pandas as pd
 import json
 import sys
@@ -25,7 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.orchestrator.tradedesk_orchestrator import TradeDesk
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history
-from src.data.technical_indicators import run_full_technical_analysis
+from src.data.technical_indicators import (
+    run_full_technical_analysis, compute_sma_series,
+    compute_bollinger_bands, compute_support_resistance,
+)
 from config import DEMO_PORTFOLIO
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -158,33 +162,107 @@ def rec_color(rec):
     return colors.get(rec, "#555")
 
 
-def price_chart(ticker):
+def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=True):
+    """
+    Build the price chart.
+
+    chart_type: "Candlestick" or "Line"
+    overlays:   subset of {"SMA 20", "SMA 50", "SMA 200", "Bollinger Bands",
+                "Support/Resistance"} — the most commonly used technical
+                markers, kept as an explicit opt-in list so the chart
+                doesn't get cluttered by default.
+    show_volume: whether to add a volume bar panel below the price panel.
+    """
+    overlays = overlays or []
     price_data = get_price_history(ticker, days=180)
     if price_data.get("error") or not price_data.get("closes"):
         return None
-    df = pd.DataFrame({"date": price_data["dates"], "price": price_data["closes"]})
-    df["date"] = pd.to_datetime(df["date"])
-    tech = run_full_technical_analysis(price_data)
-    mas = tech.get("moving_averages", {})
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["price"],
-        name=ticker, line=dict(color="#2563eb", width=2),
-        hovertemplate="%{x|%b %d}<br>$%{y:.2f}<extra></extra>",
-    ))
-    if mas.get("sma50"):
-        fig.add_hline(y=mas["sma50"], line_dash="dash",
-                      line_color="#f59e0b", annotation_text="SMA50")
-    if mas.get("sma200"):
-        fig.add_hline(y=mas["sma200"], line_dash="dot",
-                      line_color="#ef4444", annotation_text="SMA200")
-    fig.update_layout(
-        height=320, margin=dict(l=0, r=0, t=10, b=0),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False, xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+    dates = pd.to_datetime(price_data["dates"])
+    closes = price_data["closes"]
+    opens = price_data.get("opens", closes)
+    highs = price_data.get("highs", closes)
+    lows = price_data.get("lows", closes)
+    volumes = price_data.get("volumes", [])
+
+    rows = 2 if show_volume else 1
+    row_heights = [0.75, 0.25] if show_volume else [1.0]
+    fig = make_subplots(
+        rows=rows, cols=1, shared_xaxes=True,
+        row_heights=row_heights, vertical_spacing=0.03,
     )
+
+    # ── Price panel: candlestick or line ────────────────────────────
+    if chart_type == "Candlestick":
+        fig.add_trace(go.Candlestick(
+            x=dates, open=opens, high=highs, low=lows, close=closes,
+            name=ticker, increasing_line_color="#16a34a", decreasing_line_color="#dc2626",
+            showlegend=False,
+        ), row=1, col=1)
+    else:
+        fig.add_trace(go.Scatter(
+            x=dates, y=closes, name=ticker, line=dict(color="#2563eb", width=2),
+            hovertemplate="%{x|%b %d}<br>$%{y:.2f}<extra></extra>", showlegend=False,
+        ), row=1, col=1)
+
+    # ── Overlays: real rolling series, not flat single-value lines ──
+    sma_colors = {"SMA 20": "#7c3aed", "SMA 50": "#f59e0b", "SMA 200": "#ef4444"}
+    for label, color in sma_colors.items():
+        if label in overlays:
+            period = int(label.split()[-1])
+            series = compute_sma_series(closes, period)
+            fig.add_trace(go.Scatter(
+                x=dates, y=series, name=label, line=dict(color=color, width=1.3),
+                hovertemplate=f"{label}: $" + "%{y:.2f}<extra></extra>",
+            ), row=1, col=1)
+
+    if "Bollinger Bands" in overlays:
+        bb = compute_bollinger_bands(closes, period=20, num_std=2.0)
+        fig.add_trace(go.Scatter(
+            x=dates, y=bb["upper"], name="Bollinger Upper",
+            line=dict(color="#94a3b8", width=1, dash="dot"),
+            hovertemplate="Upper: $%{y:.2f}<extra></extra>",
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=dates, y=bb["lower"], name="Bollinger Lower",
+            line=dict(color="#94a3b8", width=1, dash="dot"),
+            fill="tonexty", fillcolor="rgba(148,163,184,0.08)",
+            hovertemplate="Lower: $%{y:.2f}<extra></extra>",
+        ), row=1, col=1)
+
+    if "Support/Resistance" in overlays:
+        sr = compute_support_resistance(closes)
+        if sr.get("support"):
+            fig.add_hline(y=sr["support"], line_dash="dash", line_color="#16a34a",
+                          annotation_text="Support", row=1, col=1)
+        if sr.get("resistance"):
+            fig.add_hline(y=sr["resistance"], line_dash="dash", line_color="#dc2626",
+                          annotation_text="Resistance", row=1, col=1)
+
+    # ── Volume panel ──────────────────────────────────────────────
+    if show_volume and volumes:
+        bar_colors = [
+            "#16a34a" if closes[i] >= (opens[i] if i < len(opens) else closes[i-1] if i > 0 else closes[i])
+            else "#dc2626"
+            for i in range(len(closes))
+        ]
+        fig.add_trace(go.Bar(
+            x=dates, y=volumes, name="Volume", marker_color=bar_colors,
+            showlegend=False, hovertemplate="Vol: %{y:,}<extra></extra>",
+        ), row=2, col=1)
+
+    fig.update_layout(
+        height=440 if show_volume else 340,
+        margin=dict(l=0, r=0, t=10, b=0),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=bool(overlays),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+        xaxis_rangeslider_visible=False,
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0", row=1, col=1)
+    if show_volume:
+        fig.update_yaxes(showgrid=False, row=2, col=1)
     return fig
 
 
@@ -279,7 +357,20 @@ def render_single_stock_result(result):
     col_chart, col_signals = st.columns([3, 2])
     with col_chart:
         st.subheader("Price History (6M)")
-        fig = price_chart(ticker)
+        chart_controls = st.columns([1, 2])
+        with chart_controls[0]:
+            chart_type = st.radio(
+                "View", ["Candlestick", "Line"], horizontal=True,
+                key=f"chart_type_{ticker}", label_visibility="collapsed",
+            )
+        with chart_controls[1]:
+            overlays = st.multiselect(
+                "Indicators", ["SMA 20", "SMA 50", "SMA 200", "Bollinger Bands", "Support/Resistance"],
+                default=["SMA 50", "SMA 200"], key=f"overlays_{ticker}",
+                label_visibility="collapsed", placeholder="Add indicators…",
+            )
+        show_volume = st.checkbox("Show volume", value=True, key=f"vol_{ticker}")
+        fig = price_chart(ticker, chart_type=chart_type, overlays=overlays, show_volume=show_volume)
         if fig:
             st.plotly_chart(fig, use_container_width=True)
         else:
