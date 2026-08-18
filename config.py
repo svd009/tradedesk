@@ -21,9 +21,9 @@ load_dotenv()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 # ── Model provider ────────────────────────────────────────────────────────────
-# "anthropic" → uses Anthropic API directly (current, uses your existing credits)
-# "bedrock"   → uses AWS Bedrock (swap when AWS free tier is ready)
-MODEL_PROVIDER = "anthropic"
+# "anthropic" → uses Anthropic API directly (paused — out of credits)
+# "bedrock"   → uses AWS Bedrock (active — running on AWS free credit)
+MODEL_PROVIDER = "bedrock"
 
 # ── Model selection ───────────────────────────────────────────────────────────
 # Haiku  → all 5 subagents (fast, cheap, focused single-domain tasks)
@@ -32,9 +32,10 @@ MODEL_FAST      = "claude-haiku-4-5"
 MODEL_REASONING = "claude-sonnet-4-6"
 
 # Bedrock model IDs (used when MODEL_PROVIDER = "bedrock")
-BEDROCK_MODEL_FAST      = "anthropic.claude-haiku-20240307-v1:0"
-BEDROCK_MODEL_REASONING = "anthropic.claude-sonnet-20240229-v1:0"
-BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-1")
+# Exact IDs as shown on each model's detail page in the Bedrock console.
+BEDROCK_MODEL_FAST      = "anthropic.claude-haiku-4-5-20251001-v1:0"
+BEDROCK_MODEL_REASONING = "anthropic.claude-sonnet-4-6"
+BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
 MAX_TOKENS_SUBAGENT   = 1500   # each subagent is focused — doesn't need much
