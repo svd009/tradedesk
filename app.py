@@ -506,21 +506,18 @@ def render_portfolio_result(result):
 st.title("📈 TradeDesk")
 st.caption("Multi-Subagent Equity Research & Portfolio Intelligence · Powered by Claude API")
 
-if not run_button:
-    # Landing state
-    st.info(
-        "Enter a ticker in the sidebar and click **Run Analysis** to get started.\n\n"
-        "TradeDesk runs 5 specialized research subagents in parallel — "
-        "news sentiment, fundamentals, technical analysis, macro context, and portfolio risk — "
-        "then synthesizes them using Claude Sonnet with extended thinking."
-    )
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Subagents", "5", "running in parallel")
-    col2.metric("Model", "Claude API", "Bedrock-ready")
-    col3.metric("Data sources", "3 free", "Yahoo Finance + SEC EDGAR + web")
+# st.button() only returns True for the single rerun triggered by the click
+# itself — any later rerun (e.g. toggling the chart's Line/Candlestick radio)
+# sees run_button as False again. Without storing the result, that would
+# discard the whole analysis and drop back to the landing page. Session state
+# keeps the last result alive across those reruns, and a fresh click only
+# happens when run_button is actually True, so chart interactions never
+# re-trigger the (expensive) analysis.
+if "last_result" not in st.session_state:
+    st.session_state.last_result = None
+    st.session_state.last_mode = None
 
-else:
-    # Run the analysis
+if run_button:
     if mode == "Single Stock":
         if not ticker_input:
             st.error("Please enter a ticker symbol.")
@@ -548,7 +545,8 @@ else:
                 )
                 status_container.empty()
                 progress_bar.empty()
-                render_single_stock_result(result)
+                st.session_state.last_result = result
+                st.session_state.last_mode = "single"
             except Exception as e:
                 st.error(f"Analysis failed: {str(e)}")
                 st.exception(e)
@@ -565,7 +563,29 @@ else:
                     portfolio=portfolio_input,
                     verbose=False,
                 )
-                render_portfolio_result(result)
+                st.session_state.last_result = result
+                st.session_state.last_mode = "portfolio"
             except Exception as e:
                 st.error(f"Analysis failed: {str(e)}")
                 st.exception(e)
+
+# ── Render whatever the last completed analysis was ─────────────────────────
+# This runs on every rerun, including ones triggered by chart controls, so
+# those interactions redraw instantly from the stored result instead of
+# re-running the 5-subagent pipeline or losing the result entirely.
+if st.session_state.last_result is not None:
+    if st.session_state.last_mode == "single":
+        render_single_stock_result(st.session_state.last_result)
+    else:
+        render_portfolio_result(st.session_state.last_result)
+else:
+    st.info(
+        "Enter a ticker in the sidebar and click **Run Analysis** to get started.\n\n"
+        "TradeDesk runs 5 specialized research subagents in parallel — "
+        "news sentiment, fundamentals, technical analysis, macro context, and portfolio risk — "
+        "then synthesizes them using Claude Sonnet with extended thinking."
+    )
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Subagents", "5", "running in parallel")
+    col2.metric("Model", "Claude API", "Bedrock-ready")
+    col3.metric("Data sources", "3 free", "Yahoo Finance + SEC EDGAR + web")
