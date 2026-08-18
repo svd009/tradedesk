@@ -15,15 +15,34 @@ What each subagent uses from here:
   Risk Analyst (SA5) → get_price_history() for correlation calculation
 """
 
+import time
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
 from config import PRICE_HISTORY_DAYS
 
+# ── Lightweight TTL cache ──────────────────────────────────────────────────
+# Multiple subagents (and repeat test runs on the same ticker) were each
+# hitting Yahoo Finance / EDGAR from scratch, adding real seconds to every
+# analysis. This is a plain in-memory cache with no Streamlit dependency,
+# so it works the same whether called from the app or a subagent thread.
+_CACHE_TTL_SECONDS = 300  # 5 minutes — long enough to cover one testing session
+_cache: dict = {}
+
+
+def _cached(key, fetch_fn):
+    now = time.time()
+    hit = _cache.get(key)
+    if hit and (now - hit[0]) < _CACHE_TTL_SECONDS:
+        return hit[1]
+    value = fetch_fn()
+    _cache[key] = (now, value)
+    return value
+
 
 def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
     """
-    Fetch OHLCV price history for a ticker.
+    Fetch OHLCV price history for a ticker (cached for 5 minutes).
 
     Args:
         ticker: Stock ticker symbol e.g. "NVDA"
@@ -39,11 +58,18 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
           "low_52w": float,
           "avg_volume": int,
           "dates": list[str],
+          "opens": list[float],   ← added for candlestick charting
+          "highs": list[float],   ← added for candlestick charting
+          "lows": list[float],    ← added for candlestick charting
           "closes": list[float],
           "volumes": list[int],
           "error": str or None,
         }
     """
+    return _cached(f"price:{ticker}:{days}", lambda: _fetch_price_history(ticker, days))
+
+
+def _fetch_price_history(ticker: str, days: int) -> dict:
     try:
         stock = yf.Ticker(ticker)
         end = datetime.now()
@@ -53,6 +79,9 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
         if hist.empty:
             return {"ticker": ticker, "error": f"No price data found for {ticker}"}
 
+        opens = hist["Open"].tolist()
+        highs = hist["High"].tolist()
+        lows = hist["Low"].tolist()
         closes = hist["Close"].tolist()
         volumes = hist["Volume"].tolist()
         dates = [d.strftime("%Y-%m-%d") for d in hist.index]
@@ -74,6 +103,9 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
             "low_52w": round(low_52w, 2),
             "avg_volume": int(sum(volumes) / len(volumes)),
             "dates": dates,
+            "opens": [round(o, 2) for o in opens],
+            "highs": [round(h, 2) for h in highs],
+            "lows": [round(l, 2) for l in lows],
             "closes": [round(c, 2) for c in closes],
             "volumes": volumes,
             "error": None,
@@ -85,12 +117,16 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
 
 def get_fundamentals(ticker: str) -> dict:
     """
-    Fetch key fundamental metrics for a ticker.
+    Fetch key fundamental metrics for a ticker (cached for 5 minutes).
 
     Returns the most important valuation and financial health metrics
     that an equity analyst would review — in a format the fundamentals
     subagent can reason over directly.
     """
+    return _cached(f"fundamentals:{ticker}", lambda: _fetch_fundamentals(ticker))
+
+
+def _fetch_fundamentals(ticker: str) -> dict:
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
