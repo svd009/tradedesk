@@ -188,6 +188,69 @@ def price_chart(ticker):
     return fig
 
 
+
+# Fields that hold the plain-English writeup for a subagent finding.
+_SUMMARY_FIELDS = ("summary", "rationale")
+# Fields that are just bookkeeping, not shown to the user.
+_HIDDEN_FIELDS = ("agent", "parse_error", "raw_output", "ticker", "company_name")
+# Fields that read best as bullet lists (they're lists of short strings).
+_LIST_FIELDS = ("key_events", "key_strengths", "key_risks", "tailwinds",
+                "headwinds", "key_macro_risks", "recent_catalysts")
+
+
+def render_subagent_finding(data: dict):
+    """
+    Render one subagent's finding as readable prose and signal pills,
+    instead of dumping the raw JSON the model returned.
+    """
+    # 1. The plain-English writeup goes first and reads like actual research.
+    for field in _SUMMARY_FIELDS:
+        if data.get(field):
+            st.markdown(f"> {data[field]}")
+
+    # 2. Status-style fields (single string values, not lists/dicts) as pills.
+    status_fields = {
+        k: v for k, v in data.items()
+        if k not in _HIDDEN_FIELDS and k not in _SUMMARY_FIELDS
+        and k not in _LIST_FIELDS and k != "confidence" and k != "key_levels"
+        and isinstance(v, (str, bool)) and v is not None
+    }
+    if status_fields:
+        pills = " &nbsp; ".join(
+            f"**{k.replace('_', ' ').title()}:** {signal_pill(k, v)}"
+            for k, v in status_fields.items()
+        )
+        st.markdown(pills, unsafe_allow_html=True)
+
+    # 3. Numeric/price levels (e.g. technical support & resistance) as metrics.
+    if isinstance(data.get("key_levels"), dict):
+        levels = data["key_levels"]
+        cols = st.columns(len(levels))
+        for col, (label, val) in zip(cols, levels.items()):
+            col.metric(label.replace("_", " ").title(), f"${val:,.2f}" if isinstance(val, (int, float)) else val)
+
+    # 4. List fields as actual bullet points, not JSON arrays.
+    for field in _LIST_FIELDS:
+        items = data.get(field)
+        if items:
+            st.markdown(f"**{field.replace('_', ' ').title()}**")
+            for item in items:
+                if isinstance(item, dict):
+                    # e.g. news key_events: [{"event": ..., "impact": ..., "materiality": ...}]
+                    label = item.get("event") or item.get("headline") or str(item)
+                    extra = " · ".join(
+                        str(v) for k, v in item.items() if k not in ("event", "headline")
+                    )
+                    st.markdown(f"- {label}" + (f" _({extra})_" if extra else ""))
+                else:
+                    st.markdown(f"- {item}")
+
+    # 5. Confidence as a simple progress indicator.
+    if isinstance(data.get("confidence"), (int, float)):
+        st.progress(min(max(data["confidence"], 0.0), 1.0),
+                     text=f"Model confidence: {data['confidence']:.0%}")
+
+
 def render_single_stock_result(result):
     rec_data = result["synthesis"]["recommendation"]
     ticker = result["ticker"]
@@ -278,11 +341,7 @@ def render_single_stock_result(result):
             with tab:
                 data = findings.get(key, {})
                 if data:
-                    # Show clean subset of fields
-                    display = {k: v for k, v in data.items()
-                                if k not in ("agent", "parse_error", "raw_output")
-                                and v is not None}
-                    st.json(display)
+                    render_subagent_finding(data)
                 else:
                     st.caption("No data available")
 
@@ -290,7 +349,12 @@ def render_single_stock_result(result):
     thinking = result["synthesis"].get("thinking", "")
     if thinking:
         with st.expander(f"🧠 Extended Thinking Trace ({len(thinking):,} chars)"):
-            st.markdown(f"```\n{thinking[:2000]}{'...' if len(thinking) > 2000 else ''}\n```")
+            snippet = thinking[:2000]
+            for paragraph in snippet.split("\n\n"):
+                if paragraph.strip():
+                    st.write(paragraph.strip())
+            if len(thinking) > 2000:
+                st.caption("… truncated, download the full report for the complete trace")
 
     # ── Evaluation ────────────────────────────────────────────────
     evaluator = TradeDeskevaluator()
