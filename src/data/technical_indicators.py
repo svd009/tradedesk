@@ -159,6 +159,52 @@ def compute_volume_signal(volumes: list[int], window: int = 20) -> dict:
     }
 
 
+def compute_sma_series(closes: list[float], period: int) -> list:
+    """
+    Rolling Simple Moving Average as a full series aligned to `closes`.
+    Unlike compute_sma() (which returns one current value), this returns
+    one value per day so it can be plotted as a real moving line on a
+    chart rather than a flat horizontal marker.
+    """
+    out = []
+    for i in range(len(closes)):
+        if i + 1 < period:
+            out.append(None)
+        else:
+            out.append(round(sum(closes[i + 1 - period:i + 1]) / period, 2))
+    return out
+
+
+def compute_bollinger_bands(closes: list[float], period: int = 20, num_std: float = 2.0) -> dict:
+    """
+    Bollinger Bands: a middle SMA with upper/lower bands at N standard
+    deviations. One of the most commonly used volatility overlays —
+    price hugging the upper band suggests overbought, the lower band
+    suggests oversold, and a tightening band suggests a breakout setup.
+    """
+    middle = compute_sma_series(closes, period)
+    upper, lower = [], []
+    for i in range(len(closes)):
+        if i + 1 < period:
+            upper.append(None)
+            lower.append(None)
+        else:
+            window = closes[i + 1 - period:i + 1]
+            std = float(np.std(window))
+            upper.append(round(middle[i] + num_std * std, 2))
+            lower.append(round(middle[i] - num_std * std, 2))
+    return {"middle": middle, "upper": upper, "lower": lower}
+
+
+def compute_rsi_series(closes: list[float], period: int = 14) -> list:
+    """Rolling RSI as a full series, for an optional RSI subplot on the chart."""
+    out = [None] * len(closes)
+    for i in range(period, len(closes)):
+        window = closes[i - period:i + 1]
+        out[i] = compute_rsi(window, period)
+    return out
+
+
 def run_full_technical_analysis(price_data: dict) -> dict:
     """
     Run all technical indicators on price data from market_data.py.
