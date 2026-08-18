@@ -18,6 +18,27 @@ Why does this matter?
   This is the pattern AWS calls "provider-agnostic AI integration" and
   it's specifically covered in the Claude with Amazon Bedrock course.
 
+Bedrock uses the Converse API, not raw InvokeModel:
+  Bedrock's raw InvokeModel operation (passing Anthropic's native JSON
+  body straight through) works for plain text and extended thinking, but
+  tool use through that path was unreliable in testing (ValidationException
+  on every tool-bearing request, regardless of inference profile). The
+  Converse API is AWS's purpose-built, actively-maintained interface for
+  tool calling across every Bedrock model, so this client translates to
+  and from that format instead. Agents remain completely unaware of this —
+  they still just call create_message() and get back the same
+  .content / .stop_reason shape either way.
+
+Known limitation — native web search:
+  Anthropic's server-executed "web_search" tool (used directly against the
+  Anthropic API) has no equivalent in Bedrock's Converse API — it's a
+  Claude-API-hosted capability, not something Bedrock proxies. When running
+  on Bedrock, any tool of that type is silently dropped before the request
+  is sent, so agents that rely purely on web search (News, and Macro's
+  search calls) will answer from the model's training knowledge instead of
+  live results. This is a platform gap, not a bug — a real fix would mean
+  wiring up an external search API (e.g. Tavily, Brave) as a Bedrock tool.
+
 Usage:
   from src.client.model_client import ModelClient
   client = ModelClient()
@@ -121,70 +142,158 @@ class ModelClient:
 
         return self._client.messages.create(**params)
 
+    # ── Bedrock via the Converse API ────────────────────────────────────────
+
     def _bedrock_message(self, model_id, messages, system, tools,
                          use_thinking, max_tokens):
         """
-        Call Claude via AWS Bedrock using the converse API.
+        Call Claude via AWS Bedrock's Converse API.
 
-        The Bedrock converse API uses a slightly different format than
-        the Anthropic SDK — this method handles the translation so all
-        agents remain unaware of the difference.
+        Converse has its own request/response shape, different from both
+        the Anthropic SDK and raw Bedrock InvokeModel — this method
+        translates in both directions so agents (built against the
+        Anthropic-native message format) never need to know Bedrock is
+        involved at all.
         """
-        import json
-
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "messages": messages,
-        }
-        if system:
-            body["system"] = system
-        if tools:
-            body["tools"] = tools
-        if use_thinking:
-            body["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
-
-        response = self._client.invoke_model(
+        params = dict(
             modelId=model_id,
-            body=json.dumps(body),
-            contentType="application/json",
-            accept="application/json",
+            messages=self._to_converse_messages(messages),
+            inferenceConfig={"maxTokens": max_tokens},
         )
+        if system:
+            params["system"] = [{"text": system}]
 
-        # Parse and wrap Bedrock response to match Anthropic SDK shape
-        result = json.loads(response["body"].read())
-        return BedrockResponseWrapper(result)
+        converse_tools = self._to_converse_tools(tools) if tools else []
+        if converse_tools:
+            params["toolConfig"] = {"tools": converse_tools}
+
+        if use_thinking:
+            params["additionalModelRequestFields"] = {
+                "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+            }
+
+        response = self._client.converse(**params)
+        return ConverseResponseWrapper(response)
+
+    def _to_converse_messages(self, messages: list) -> list:
+        """
+        Translate Anthropic-native message history into Converse's format.
+
+        Three shapes show up in practice, all produced by base_agent.py's
+        tool-use loop:
+          1. Initial user turn — content is a plain string.
+          2. Assistant turn (after a tool_use response) — content is a list
+             of our own TextBlock/ToolUseBlock/ThinkingBlock wrapper objects.
+          3. User turn carrying tool results — content is a list of
+             Anthropic-native {"type": "tool_result", ...} dicts.
+        """
+        converted = []
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+
+            if isinstance(content, str):
+                converted.append({"role": role, "content": [{"text": content}]})
+                continue
+
+            blocks = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "tool_result":
+                    result_text = item.get("content", "")
+                    if not isinstance(result_text, str):
+                        result_text = str(result_text)
+                    blocks.append({
+                        "toolResult": {
+                            "toolUseId": item["tool_use_id"],
+                            "content": [{"text": result_text}],
+                        }
+                    })
+                elif isinstance(item, TextBlock):
+                    blocks.append({"text": item.text})
+                elif isinstance(item, ToolUseBlock):
+                    blocks.append({
+                        "toolUse": {
+                            "toolUseId": item.id,
+                            "name": item.name,
+                            "input": item.input,
+                        }
+                    })
+                elif isinstance(item, ThinkingBlock):
+                    # Reasoning content is echoed back only if the SDK
+                    # requires it in history; safe to omit for our
+                    # single-tool-loop use case (no multi-turn thinking).
+                    continue
+                elif isinstance(item, dict) and "text" in item:
+                    blocks.append({"text": item["text"]})
+
+            converted.append({"role": role, "content": blocks})
+
+        return converted
+
+    def _to_converse_tools(self, tools: list) -> list:
+        """
+        Translate Anthropic-native tool schemas into Converse's toolSpec
+        format. Native server-executed tools (e.g. Anthropic's web_search,
+        identified by a "type" field instead of an "input_schema") have no
+        Converse equivalent and are dropped — see the module docstring.
+        """
+        converted = []
+        for tool in tools:
+            if "input_schema" not in tool:
+                # e.g. WEB_SEARCH_TOOL — not representable via Converse, skip.
+                continue
+            converted.append({
+                "toolSpec": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "inputSchema": {"json": tool["input_schema"]},
+                }
+            })
+        return converted
 
 
-class BedrockResponseWrapper:
+class ConverseResponseWrapper:
     """
-    Wraps a raw Bedrock response dict to expose the same interface
+    Wraps a Bedrock Converse API response to expose the same interface
     as an Anthropic SDK response object (.content, .stop_reason).
-
-    This is what makes the provider swap truly transparent to agents —
-    they call response.content and response.stop_reason regardless of
-    which provider produced the response.
     """
+
+    _STOP_REASON_MAP = {
+        "tool_use": "tool_use",
+        "end_turn": "end_turn",
+        "max_tokens": "max_tokens",
+        "stop_sequence": "stop_sequence",
+        "content_filtered": "end_turn",
+    }
 
     def __init__(self, raw: dict):
         self._raw = raw
-        self.stop_reason = raw.get("stop_reason", "end_turn")
-        self.content = self._parse_content(raw.get("content", []))
+        self.stop_reason = self._STOP_REASON_MAP.get(
+            raw.get("stopReason", "end_turn"), "end_turn"
+        )
+        message = raw.get("output", {}).get("message", {})
+        self.content = self._parse_content(message.get("content", []))
 
     def _parse_content(self, raw_content: list) -> list:
-        """Convert Bedrock content blocks to Anthropic SDK-compatible objects."""
+        """Convert Converse content blocks to Anthropic SDK-compatible objects."""
         blocks = []
         for block in raw_content:
-            if block.get("type") == "text":
+            if "text" in block:
                 blocks.append(TextBlock(block["text"]))
-            elif block.get("type") == "tool_use":
+            elif "toolUse" in block:
+                tu = block["toolUse"]
                 blocks.append(ToolUseBlock(
-                    id=block["id"],
-                    name=block["name"],
-                    input=block["input"],
+                    id=tu["toolUseId"],
+                    name=tu["name"],
+                    input=tu.get("input", {}),
                 ))
-            elif block.get("type") == "thinking":
-                blocks.append(ThinkingBlock(block.get("thinking", "")))
+            elif "reasoningContent" in block:
+                text = (
+                    block["reasoningContent"]
+                    .get("reasoningText", {})
+                    .get("text", "")
+                )
+                blocks.append(ThinkingBlock(text))
         return blocks
 
 
