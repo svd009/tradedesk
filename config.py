@@ -40,10 +40,10 @@ MODEL_REASONING = "claude-sonnet-4-6"
 # These are cross-region inference profile IDs, not raw model IDs — Bedrock
 # rejects on-demand InvokeModel calls to the raw model ID for these newer
 # Claude models and requires an inference profile instead.
-# Using the US regional profile (not Global) — the Global profile returned
-# ValidationException on every request that included tools, while non-tool
-# requests (e.g. synthesis) worked fine on Global. Testing whether tool use
-# is supported on the US profile instead.
+# Using the US regional profile (not Global) — the Global profile rejected
+# every request that included tools (ValidationException), while the US
+# profile handles tool use correctly. Confirmed working via the Converse
+# API path in src/client/model_client.py.
 BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
