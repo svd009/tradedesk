@@ -85,7 +85,7 @@ with st.sidebar:
         ticker_input = st.text_input(
             "Ticker Symbol",
             value="NVDA",
-            placeholder="e.g. NVDA, AAPL, TSLA",
+            placeholder="US: NVDA, AAPL — India: RELIANCE.NS, TCS.BO",
         ).upper().strip()
         include_portfolio_context = st.checkbox(
             "Include portfolio context (SA5)",
@@ -136,6 +136,33 @@ with st.sidebar:
 
 # ── Helper functions ──────────────────────────────────────────────────────────
 
+# Common currency codes yfinance returns via stock.info["currency"], mapped
+# to their display symbol. Falls back to the code itself (e.g. "SEK") for
+# anything not in this list, rather than silently assuming USD.
+_CURRENCY_SYMBOLS = {
+    "USD": "$", "INR": "₹", "GBP": "£", "EUR": "€", "JPY": "¥",
+    "CNY": "¥", "HKD": "HK$", "KRW": "₩", "CAD": "C$", "AUD": "A$",
+    "SGD": "S$", "CHF": "CHF ", "BRL": "R$",
+}
+
+
+def is_supported_ticker(ticker: str) -> bool:
+    """
+    TradeDesk currently supports US tickers (no suffix, e.g. AAPL) and
+    Indian NSE/BSE tickers (.NS or .BO suffix, e.g. RELIANCE.NS). Anything
+    else (other .XX exchange suffixes) is rejected with a clear message
+    rather than silently returning wrong or empty data.
+    """
+    ticker = ticker.upper().strip()
+    if "." not in ticker:
+        return True  # no suffix — treated as a US ticker
+    return ticker.endswith(".NS") or ticker.endswith(".BO")
+
+
+def currency_symbol(currency_code: str) -> str:
+    return _CURRENCY_SYMBOLS.get(currency_code, f"{currency_code} " if currency_code else "$")
+
+
 def signal_pill(label, value):
     if value is None:
         return f'<span class="signal-pill na">N/A</span>'
@@ -184,6 +211,7 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
     highs = price_data.get("highs", closes)
     lows = price_data.get("lows", closes)
     volumes = price_data.get("volumes", [])
+    curr = currency_symbol(price_data.get("currency", "USD"))
 
     rows = 2 if show_volume else 1
     row_heights = [0.75, 0.25] if show_volume else [1.0]
@@ -202,7 +230,7 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
     else:
         fig.add_trace(go.Scatter(
             x=dates, y=closes, name=ticker, line=dict(color="#2563eb", width=2),
-            hovertemplate="%{x|%b %d}<br>$%{y:.2f}<extra></extra>", showlegend=False,
+            hovertemplate="%{x|%b %d}<br>" + curr + "%{y:.2f}<extra></extra>", showlegend=False,
         ), row=1, col=1)
 
     # ── Overlays: real rolling series, not flat single-value lines ──
@@ -213,7 +241,7 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
             series = compute_sma_series(closes, period)
             fig.add_trace(go.Scatter(
                 x=dates, y=series, name=label, line=dict(color=color, width=1.3),
-                hovertemplate=f"{label}: $" + "%{y:.2f}<extra></extra>",
+                hovertemplate=f"{label}: {curr}" + "%{y:.2f}<extra></extra>",
             ), row=1, col=1)
 
     if "Bollinger Bands" in overlays:
@@ -221,13 +249,13 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
         fig.add_trace(go.Scatter(
             x=dates, y=bb["upper"], name="Bollinger Upper",
             line=dict(color="#94a3b8", width=1, dash="dot"),
-            hovertemplate="Upper: $%{y:.2f}<extra></extra>",
+            hovertemplate="Upper: " + curr + "%{y:.2f}<extra></extra>",
         ), row=1, col=1)
         fig.add_trace(go.Scatter(
             x=dates, y=bb["lower"], name="Bollinger Lower",
             line=dict(color="#94a3b8", width=1, dash="dot"),
             fill="tonexty", fillcolor="rgba(148,163,184,0.08)",
-            hovertemplate="Lower: $%{y:.2f}<extra></extra>",
+            hovertemplate="Lower: " + curr + "%{y:.2f}<extra></extra>",
         ), row=1, col=1)
 
     if "Support/Resistance" in overlays:
@@ -276,7 +304,7 @@ _LIST_FIELDS = ("key_events", "key_strengths", "key_risks", "tailwinds",
                 "headwinds", "key_macro_risks", "recent_catalysts")
 
 
-def render_subagent_finding(data: dict):
+def render_subagent_finding(data: dict, currency: str = "$"):
     """
     Render one subagent's finding as readable prose and signal pills,
     instead of dumping the raw JSON the model returned.
@@ -305,7 +333,7 @@ def render_subagent_finding(data: dict):
         levels = data["key_levels"]
         cols = st.columns(len(levels))
         for col, (label, val) in zip(cols, levels.items()):
-            col.metric(label.replace("_", " ").title(), f"${val:,.2f}" if isinstance(val, (int, float)) else val)
+            col.metric(label.replace("_", " ").title(), f"{currency}{val:,.2f}" if isinstance(val, (int, float)) else val)
 
     # 4. List fields as actual bullet points, not JSON arrays.
     for field in _LIST_FIELDS:
@@ -336,6 +364,7 @@ def render_single_stock_result(result):
     rec = rec_data.get("recommendation", "HOLD")
     confidence = rec_data.get("confidence", 0)
     score = rec_data.get("composite_score", 5)
+    curr = currency_symbol(get_price_history(ticker, days=180).get("currency", "USD"))
 
     # ── Header ────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -442,7 +471,7 @@ def render_single_stock_result(result):
             with tab:
                 data = findings.get(key, {})
                 if data:
-                    render_subagent_finding(data)
+                    render_subagent_finding(data, currency=curr)
                 else:
                     st.caption("No data available")
 
@@ -532,6 +561,13 @@ if run_button:
         if not ticker_input:
             st.error("Please enter a ticker symbol.")
             st.stop()
+        if not is_supported_ticker(ticker_input):
+            st.error(
+                "TradeDesk currently supports **US** stocks (e.g. `AAPL`, `NVDA`) "
+                "and **Indian** stocks on NSE/BSE (e.g. `RELIANCE.NS`, `TCS.BO`) only. "
+                "Other exchanges aren't supported yet."
+            )
+            st.stop()
 
         status_container = st.empty()
         progress_bar = st.progress(0)
@@ -564,6 +600,14 @@ if run_button:
     else:
         if not portfolio_input:
             st.error("Please enter at least one holding.")
+            st.stop()
+        unsupported = [t for t in portfolio_input if not is_supported_ticker(t)]
+        if unsupported:
+            st.error(
+                f"These tickers aren't from a supported market: {', '.join(unsupported)}. "
+                "TradeDesk currently supports US stocks and Indian NSE/BSE stocks "
+                "(`.NS` / `.BO` suffix) only."
+            )
             st.stop()
 
         with st.spinner("Analyzing portfolio..."):
