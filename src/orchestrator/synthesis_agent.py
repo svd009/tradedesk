@@ -83,8 +83,8 @@ Return ONLY valid JSON with no markdown fences:
     "portfolio_fit": "GOOD | NEUTRAL | POOR | NOT_APPLICABLE"
   },
   "key_conflicts": ["describe any major signal conflicts and how you resolved them"],
-  "bull_case": "2-3 sentence bull case for the stock",
-  "bear_case": "2-3 sentence bear case for the stock",
+  "bull_case": ["list of 3-4 distinct, specific bull case points, each one short phrase or sentence — not a paragraph"],
+  "bear_case": ["list of 3-4 distinct, specific bear case points, each one short phrase or sentence — not a paragraph"],
   "key_risks": ["top 3 risks to the recommendation"],
   "catalysts_to_watch": ["top 2-3 upcoming events or data points to monitor"],
   "executive_summary": "3-4 sentence plain English summary suitable for a portfolio manager",
