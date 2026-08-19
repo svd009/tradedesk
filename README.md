@@ -134,7 +134,7 @@ tradedesk/
 
 ## Built With
 
-- [Anthropic Claude API](https://docs.anthropic.com) — claude-haiku-4-5 (subagents), claude-sonnet-4-6 + extended thinking (synthesis)
+- [Anthropic Claude API](https://docs.anthropic.com) — claude-haiku-4.5 (subagents), claude-sonnet-4.6 + extended thinking (synthesis)
 - [yfinance](https://github.com/ranaroussi/yfinance) — Yahoo Finance price and fundamental data
 - [SEC EDGAR API](https://www.sec.gov/developer) — free public filing data
 - [Streamlit](https://streamlit.io) — web interface
