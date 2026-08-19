@@ -30,6 +30,8 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+import requests
+from config import TAVILY_API_KEY
 from src.data.market_data import get_price_history, get_fundamentals, get_sector_performance
 from src.data.sec_filings import get_filing_summary
 from src.data.technical_indicators import run_full_technical_analysis
@@ -190,8 +192,7 @@ class MarketToolExecutor:
             "get_sector_comparison":    self._sector_comparison,
             "get_sec_filings":          self._sec_filings,
             "get_portfolio_exposure":   self._portfolio_exposure,
-            # search_market_news is handled by Claude's native web_search tool
-            # so it doesn't need an executor here
+            "search_market_news":       self._search_market_news,
         }
         handler = handlers.get(tool_name)
         if not handler:
@@ -219,6 +220,53 @@ class MarketToolExecutor:
 
     def _sec_filings(self, ticker: str) -> dict:
         return get_filing_summary(ticker)
+
+    def _search_market_news(self, query: str, max_results: int = 5) -> dict:
+        """
+        Real-time web search via Tavily, used by News and Macro agents for
+        current events, earnings, and sentiment. Not a simulation — this
+        hits Tavily's live API and returns real, current results.
+        """
+        if not TAVILY_API_KEY:
+            return {
+                "error": "TAVILY_API_KEY not configured — search unavailable. "
+                         "Get a free key at tavily.com and add it to your secrets.",
+                "results": [],
+            }
+        try:
+            resp = requests.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": TAVILY_API_KEY,
+                    "query": query,
+                    "search_depth": "basic",
+                    "topic": "news",
+                    "max_results": max_results,
+                    "days": 60,  # recent coverage only — matches subagent prompts
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return {"error": f"Tavily API returned {resp.status_code}", "results": []}
+
+            data = resp.json()
+            results = [
+                {
+                    "title": r.get("title"),
+                    "url": r.get("url"),
+                    "snippet": r.get("content", "")[:500],
+                    "published_date": r.get("published_date"),
+                }
+                for r in data.get("results", [])
+            ]
+            return {
+                "query": query,
+                "answer": data.get("answer"),  # Tavily's own synthesized summary, if present
+                "results": results,
+                "result_count": len(results),
+            }
+        except Exception as e:
+            return {"error": str(e), "results": []}
 
     def _portfolio_exposure(self, portfolio: dict,
                             new_ticker: str = None) -> dict:
