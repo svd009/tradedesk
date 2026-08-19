@@ -360,13 +360,13 @@ def render_single_stock_result(result):
         chart_controls = st.columns([1, 2])
         with chart_controls[0]:
             chart_type = st.radio(
-                "View", ["Candlestick", "Line"], horizontal=True,
+                "View", ["Line", "Candlestick"], horizontal=True,
                 key=f"chart_type_{ticker}", label_visibility="collapsed",
             )
         with chart_controls[1]:
             overlays = st.multiselect(
                 "Indicators", ["SMA 20", "SMA 50", "SMA 200", "Bollinger Bands", "Support/Resistance"],
-                default=["SMA 50", "SMA 200"], key=f"overlays_{ticker}",
+                default=[], key=f"overlays_{ticker}",
                 label_visibility="collapsed", placeholder="Add indicators…",
             )
         show_volume = st.checkbox("Show volume", value=True, key=f"vol_{ticker}")
