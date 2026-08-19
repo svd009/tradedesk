@@ -399,11 +399,21 @@ def render_single_stock_result(result):
     st.subheader("Executive Summary")
     st.info(rec_data.get("executive_summary", ""))
 
+    def render_case(items):
+        """
+        bull_case/bear_case are now a list of points. Handles the old
+        paragraph-string format too, in case a result from before this
+        change is still in session state, so it never renders blank.
+        """
+        if isinstance(items, str):
+            return items  # old format — show as-is rather than breaking
+        return "\n".join(f"- {point}" for point in items) if items else ""
+
     col_bull, col_bear = st.columns(2)
     with col_bull:
-        st.success(f"**Bull Case**\n\n{rec_data.get('bull_case', '')}")
+        st.success(f"**Bull Case**\n\n{render_case(rec_data.get('bull_case', []))}")
     with col_bear:
-        st.error(f"**Bear Case**\n\n{rec_data.get('bear_case', '')}")
+        st.error(f"**Bear Case**\n\n{render_case(rec_data.get('bear_case', []))}")
 
     # ── Risks + catalysts ─────────────────────────────────────────
     col_risk, col_cat = st.columns(2)
