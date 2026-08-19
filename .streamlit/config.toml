@@ -1,1 +1,12 @@
-
+# Hides developer-only items (the "Deploy" button, "Clear cache",
+# "Record a screencast", etc.) from the hamburger menu and toolbar,
+# since testers viewing the public app don't need them.
+#
+# Note: this does NOT hide the GitHub/pencil icon badge in the top-right
+# corner — that's injected by Streamlit Community Cloud itself as
+# platform branding for free-tier hosted apps, separate from anything
+# this app controls, and there isn't a reliable supported way to remove
+# it as of this writing. The Share and app menu (three dots) are
+# unaffected by this setting and continue to work normally.
+[client]
+toolbarMode = "viewer"
