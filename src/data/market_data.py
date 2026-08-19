@@ -93,6 +93,7 @@ def _fetch_price_history(ticker: str, days: int) -> dict:
         info = stock.info
         high_52w = info.get("fiftyTwoWeekHigh", max(closes))
         low_52w = info.get("fiftyTwoWeekLow", min(closes))
+        currency = info.get("currency", "USD")  # e.g. "INR" for .NS/.BO tickers
 
         return {
             "ticker": ticker,
@@ -102,6 +103,7 @@ def _fetch_price_history(ticker: str, days: int) -> dict:
             "high_52w": round(high_52w, 2),
             "low_52w": round(low_52w, 2),
             "avg_volume": int(sum(volumes) / len(volumes)),
+            "currency": currency,
             "dates": dates,
             "opens": [round(o, 2) for o in opens],
             "highs": [round(h, 2) for h in highs],
