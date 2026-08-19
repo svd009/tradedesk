@@ -10,7 +10,7 @@ from src.mcp_server.market_tools import TOOL_SCHEMAS
 
 MACRO_TOOLS = [
     s for s in TOOL_SCHEMAS
-    if s["name"] == "get_sector_comparison"
+    if s["name"] in ("get_sector_comparison", "search_market_news")
 ]
 
 MACRO_SYSTEM_PROMPT = """You are a macro and sector analyst specializing in top-down equity research.
@@ -57,7 +57,7 @@ class MacroAgent(BaseAgent):
 
 <instructions>
 1. Call get_sector_comparison("{ticker}") to get relative performance data
-2. Use web search to assess current macro environment relevant to this company:
+2. Call search_market_news to assess current macro environment relevant to this company:
    - Search: "current macro environment {ticker} sector outlook 2025"
    - Search: "{name} competitive landscape sector trends 2025"
 3. Identify specific tailwinds and headwinds for this company given macro conditions
@@ -65,7 +65,7 @@ class MacroAgent(BaseAgent):
 
 Return structured JSON as specified. No markdown fences. JSON only.
 """
-        raw = self._run_loop(user_message, use_web_search=True, verbose=verbose)
+        raw = self._run_loop(user_message, use_web_search=False, verbose=verbose)
         result = self._parse_json(raw)
         result["agent"] = "macro_sector"
         if verbose:
