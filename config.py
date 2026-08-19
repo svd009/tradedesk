@@ -19,6 +19,11 @@ load_dotenv()
 
 # ── API credentials ───────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+# Powers the search_market_news tool (News and Macro agents). Bedrock has no
+# equivalent of Anthropic's native web_search tool, so live search runs
+# through this instead — works identically regardless of MODEL_PROVIDER.
+# Free tier: 1,000 searches/month, no card required. Get a key at tavily.com.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 # ── Model provider ────────────────────────────────────────────────────────────
 # "anthropic" → uses Anthropic API directly (paused — out of credits)
