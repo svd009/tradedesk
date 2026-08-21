@@ -30,7 +30,7 @@ from src.data.technical_indicators import (
     run_full_technical_analysis, compute_sma_series,
     compute_bollinger_bands, compute_support_resistance,
 )
-from config import DEMO_PORTFOLIO
+from config import DEMO_PORTFOLIO, PRICE_HISTORY_DAYS
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -202,7 +202,7 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
     show_volume: whether to add a volume bar panel below the price panel.
     """
     overlays = overlays or []
-    price_data = get_price_history(ticker, days=180)
+    price_data = get_price_history(ticker, days=PRICE_HISTORY_DAYS)
     if price_data.get("error") or not price_data.get("closes"):
         return None
 
@@ -435,7 +435,7 @@ def render_single_stock_result(result):
     rec = rec_data.get("recommendation", "HOLD")
     confidence = rec_data.get("confidence", 0)
     score = rec_data.get("composite_score", 5)
-    curr = currency_symbol(get_price_history(ticker, days=180).get("currency", "USD"))
+    curr = currency_symbol(get_price_history(ticker, days=PRICE_HISTORY_DAYS).get("currency", "USD"))
 
     # ── Header ────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -456,7 +456,7 @@ def render_single_stock_result(result):
     # ── Price chart + signal summary ──────────────────────────────
     col_chart, col_signals = st.columns([3, 2])
     with col_chart:
-        st.subheader("Price History (6M)")
+        st.subheader("Price History (since ~Jan 2025)")
         chart_controls = st.columns([1, 2])
         with chart_controls[0]:
             chart_type = st.radio(
