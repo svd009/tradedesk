@@ -40,21 +40,33 @@ MODEL_REASONING = "claude-sonnet-4-6"
 # These are cross-region inference profile IDs, not raw model IDs — Bedrock
 # rejects on-demand InvokeModel calls to the raw model ID for these newer
 # Claude models and requires an inference profile instead.
-# Using the US regional profile (not Global) — the Global profile rejected
-# every request that included tools (ValidationException), while the US
-# profile handles tool use correctly. Confirmed working via the Converse
-# API path in src/client/model_client.py.
+# Using the US regional profile (not Global) — the Global profile returned
+# ValidationException on every request that included tools, while non-tool
+# requests (e.g. synthesis) worked fine on Global. Testing whether tool use
+# is supported on the US profile instead.
 BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
 MAX_TOKENS_SUBAGENT   = 1500   # each subagent is focused — doesn't need much
-MAX_TOKENS_SYNTHESIS  = 6000   # synthesis needs room for extended thinking
-THINKING_BUDGET       = 4000   # tokens for extended thinking in synthesis
+MAX_TOKENS_SYNTHESIS  = 3500   # reduced from 6000 — bull/bear case is now
+                                # bullet points, not paragraphs, so it needs
+                                # less room; generation time scales with
+                                # this number, so this is a direct latency cut
+THINKING_BUDGET       = 3000   # reduced from 4000 — a middle ground: still
+                                # a real latency cut, but keeps enough room
+                                # for genuine step-by-step conflict
+                                # resolution across all 5 signals rather
+                                # than risking shallower reasoning on the
+                                # one step where missing something matters most
 
 # ── Data settings ─────────────────────────────────────────────────────────────
-PRICE_HISTORY_DAYS    = 180    # 6 months of price data for technical analysis
+PRICE_HISTORY_DAYS    = 600    # ~20 months — covers back to ~Jan 2025 for the
+                                # chart, and comfortably supports SMA 200
+                                # (which needs 200+ trading days; 180 days
+                                # was never enough, so that overlay silently
+                                # produced no line at all until this fix)
 SEC_FILING_CHARS      = 8000   # max chars to extract from SEC filings
 NEWS_SEARCH_RESULTS   = 5      # number of news results per search query
 
