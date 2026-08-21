@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.orchestrator.tradedesk_orchestrator import TradeDesk
 from src.evaluation.eval_framework import TradeDeskevaluator
-from src.data.market_data import get_price_history
+from src.data.market_data import get_price_history, get_fundamentals
 from src.data.technical_indicators import (
     run_full_technical_analysis, compute_sma_series,
     compute_bollinger_bands, compute_support_resistance,
@@ -357,6 +357,76 @@ def render_subagent_finding(data: dict, currency: str = "$"):
                      text=f"Model confidence: {data['confidence']:.0%}")
 
 
+def _pct(value):
+    """Format a decimal (0.63) as a percentage string (63.0%), handling None."""
+    return f"{value * 100:.1f}%" if isinstance(value, (int, float)) else "N/A"
+
+
+def _num(value, decimals=2):
+    return f"{value:.{decimals}f}" if isinstance(value, (int, float)) else "N/A"
+
+
+def render_quarterly_and_fundamentals(ticker: str, currency: str = "$"):
+    """
+    Real quarterly earnings and fundamental ratios, straight from Yahoo
+    Finance. Shown separately from the Fundamentals agent's own narrative
+    summary so the actual numbers are guaranteed accurate rather than
+    depending on the model to transcribe them correctly in prose.
+    """
+    fund = get_fundamentals(ticker)
+    if fund.get("error"):
+        st.caption("Fundamental data unavailable for this ticker.")
+        return
+
+    st.markdown("**Recent Quarterly Earnings (EPS)**")
+    earnings = fund.get("recent_earnings_surprises", [])
+    if earnings:
+        rows = []
+        for e in earnings:
+            est = e.get("eps_estimate")
+            act = e.get("eps_actual")
+            surprise = e.get("surprise_pct")
+            rows.append({
+                "Period": e.get("period", "—"),
+                "EPS Estimate": _num(est) if est is not None else "N/A",
+                "EPS Actual": _num(act) if act is not None else "N/A",
+                "Surprise": _pct(surprise / 100 if isinstance(surprise, (int, float)) else None)
+                            if surprise is not None else "N/A",
+            })
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    else:
+        st.caption("No recent quarterly earnings data available for this ticker.")
+
+    st.markdown("**Key Fundamental Metrics**")
+    cols = st.columns(4)
+    metrics = [
+        ("P/E Ratio", _num(fund.get("pe_ratio"))),
+        ("Forward P/E", _num(fund.get("forward_pe"))),
+        ("PEG Ratio", _num(fund.get("peg_ratio"))),
+        ("Price/Book", _num(fund.get("price_to_book"))),
+        ("Price/Sales", _num(fund.get("price_to_sales"))),
+        ("Revenue Growth (YoY)", _pct(fund.get("revenue_growth_yoy"))),
+        ("Earnings Growth (YoY)", _pct(fund.get("earnings_growth_yoy"))),
+        ("Gross Margin", _pct(fund.get("gross_margin"))),
+        ("Operating Margin", _pct(fund.get("operating_margin"))),
+        ("Profit Margin", _pct(fund.get("profit_margin"))),
+        ("Return on Equity", _pct(fund.get("return_on_equity"))),
+        ("Return on Assets", _pct(fund.get("return_on_assets"))),
+        ("Debt/Equity", _num(fund.get("debt_to_equity"))),
+        ("Current Ratio", _num(fund.get("current_ratio"))),
+        ("Free Cash Flow", f"{currency}{fund['free_cash_flow_b']}B" if fund.get("free_cash_flow_b") else "N/A"),
+        ("Dividend Yield", _pct(fund.get("dividend_yield"))),
+        ("Beta", _num(fund.get("beta"))),
+        ("Analyst Target", f"{currency}{_num(fund.get('analyst_target_price'))}" if fund.get("analyst_target_price") else "N/A"),
+    ]
+    for i, (label, value) in enumerate(metrics):
+        cols[i % 4].metric(label, value)
+
+    if fund.get("business_summary"):
+        with st.expander("Business summary"):
+            st.caption(fund["business_summary"])
+
+
 def render_single_stock_result(result):
     rec_data = result["synthesis"]["recommendation"]
     ticker = result["ticker"]
@@ -474,6 +544,9 @@ def render_single_stock_result(result):
                     render_subagent_finding(data, currency=curr)
                 else:
                     st.caption("No data available")
+                if key == "fundamentals":
+                    st.divider()
+                    render_quarterly_and_fundamentals(ticker, currency=curr)
 
     # ── Extended thinking ─────────────────────────────────────────
     thinking = result["synthesis"].get("thinking", "")
