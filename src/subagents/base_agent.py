@@ -71,7 +71,12 @@ class BaseAgent:
             tools.append(WEB_SEARCH_TOOL)
 
         messages = [{"role": "user", "content": user_message}]
-        max_turns = 8
+        # 6 gives comfortable room for 2-3 tool calls plus a final answer,
+        # while still capping worst-case latency below the original 8.
+        # Critically: exhausting this limit no longer means losing the
+        # signal entirely (see the fallback call below) — 6 vs 4 vs 8 now
+        # only affects speed, not whether this agent produces a real answer.
+        max_turns = 6
 
         for turn in range(max_turns):
             response = self.client.create_message(
@@ -118,7 +123,32 @@ class BaseAgent:
                     if hasattr(block, "text")
                 )
 
-        return '{"error": "Agent exceeded maximum turns without producing a final answer"}'
+        # Turns exhausted without a natural final answer. Rather than
+        # silently losing this agent's entire signal (the old behavior —
+        # a bare error with nothing usable), force one last call with NO
+        # tools offered, so the model has no choice but to synthesize a
+        # real structured answer from whatever it already gathered across
+        # the tool calls made so far. Worse than a clean finish, but far
+        # better than the signal going dark.
+        if verbose:
+            print(f"    [{self.agent_name}] ⚠ hit turn limit, forcing final answer from partial data")
+        fallback_response = self.client.create_message(
+            model="fast",
+            messages=messages + [{
+                "role": "user",
+                "content": "You're out of tool calls. Answer now with your best "
+                            "assessment based on whatever data you've already gathered, "
+                            "in the exact JSON format from your system prompt. If some "
+                            "fields are genuinely unknown, use null rather than guessing, "
+                            "but still return complete, valid JSON.",
+            }],
+            system=self.SYSTEM_PROMPT,
+            tools=None,  # no tools — forces a text answer, can't loop further
+        )
+        return "".join(
+            block.text for block in fallback_response.content
+            if hasattr(block, "text")
+        )
 
     def _parse_json(self, raw: str) -> dict:
         """
