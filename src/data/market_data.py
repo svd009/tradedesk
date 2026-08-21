@@ -184,7 +184,7 @@ def _fetch_fundamentals(ticker: str) -> dict:
             "analyst_target_price": info.get("targetMeanPrice"),
             "analyst_recommendation": info.get("recommendationKey"),
             "recent_earnings_surprises": recent_earnings,
-            "business_summary": _truncate_at_word(info.get("longBusinessSummary", ""), 500),
+            "business_summary": _truncate_at_word(info.get("longBusinessSummary", ""), 1200),
             "error": None,
         }
 
