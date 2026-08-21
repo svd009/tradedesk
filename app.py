@@ -569,6 +569,23 @@ if run_button:
             )
             st.stop()
 
+        # Confirm this is an actual, tradeable ticker BEFORE spending any AI
+        # API calls or search credits on it. Without this check, typing a
+        # person's name (or any garbage) still ran the full 5-agent +
+        # synthesis pipeline, burning real cost and cycles, and the models
+        # would sometimes fabricate a confident-looking recommendation from
+        # zero real data instead of clearly failing. This check costs one
+        # cheap Yahoo Finance lookup, not an AI call.
+        with st.spinner(f"Checking that {ticker_input} is a real ticker..."):
+            precheck = get_price_history(ticker_input, days=5)
+        if precheck.get("error") or not precheck.get("closes"):
+            st.error(
+                f"**\"{ticker_input}\"** doesn't match a real, tradeable stock. "
+                "Double-check the ticker symbol, for Indian stocks remember the "
+                "`.NS` or `.BO` suffix, e.g. `RELIANCE.NS`."
+            )
+            st.stop()
+
         status_container = st.empty()
         progress_bar = st.progress(0)
         agent_statuses = {}
@@ -607,6 +624,19 @@ if run_button:
                 f"These tickers aren't from a supported market: {', '.join(unsupported)}. "
                 "TradeDesk currently supports US stocks and Indian NSE/BSE stocks "
                 "(`.NS` / `.BO` suffix) only."
+            )
+            st.stop()
+
+        with st.spinner("Checking that all tickers are real..."):
+            precheck_results = {t: get_price_history(t, days=5) for t in portfolio_input}
+            invalid = [
+                t for t, data in precheck_results.items()
+                if data.get("error") or not data.get("closes")
+            ]
+        if invalid:
+            st.error(
+                f"These don't match real, tradeable stocks: {', '.join(invalid)}. "
+                "Double-check the tickers before running the analysis."
             )
             st.stop()
 
