@@ -84,8 +84,8 @@ with st.sidebar:
     if mode == "Single Stock":
         ticker_input = st.text_input(
             "Ticker Symbol",
-            value="NVDA",
-            placeholder="US: NVDA, AAPL — India: RELIANCE.NS, TCS.BO",
+            value="",
+            placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
         ).upper().strip()
         include_portfolio_context = st.checkbox(
             "Include portfolio context (SA5)",
@@ -131,7 +131,8 @@ with st.sidebar:
     )
 
     st.divider()
-    st.caption("Built with Claude API · Multi-subagent architecture · Bedrock-ready")
+    # NOTE (not shown in UI): "Built with Claude API · Multi-subagent
+    # architecture · Bedrock-ready" used to appear here as a sidebar caption.
 
 
 # ── Helper functions ──────────────────────────────────────────────────────────
@@ -614,9 +615,11 @@ def render_portfolio_result(result):
             render_single_stock_result(result["individual_results"][ticker])
 
 
-# ── Main app ──────────────────────────────────────────────────────────────────
+# NOTE: caption used to end with "· Powered by Claude API" — removed from
+# the visible UI per request; the model provider is still fully documented
+# in config.py and the study guide, just not surfaced to end users.
 st.title("📈 TradeDesk")
-st.caption("Multi-Subagent Equity Research & Portfolio Intelligence · Powered by Claude API")
+st.caption("Multi-Subagent Equity Research & Portfolio Intelligence")
 
 # st.button() only returns True for the single rerun triggered by the click
 # itself — any later rerun (e.g. toggling the chart's Line/Candlestick radio)
@@ -736,13 +739,19 @@ if st.session_state.last_result is not None:
     else:
         render_portfolio_result(st.session_state.last_result)
 else:
-    st.info(
-        "Enter a ticker in the sidebar and click **Run Analysis** to get started.\n\n"
-        "TradeDesk runs 5 specialized research subagents in parallel — "
-        "news sentiment, fundamentals, technical analysis, macro context, and portfolio risk — "
-        "then synthesizes them using Claude Sonnet with extended thinking."
+    st.markdown("## 5 specialists. Zero forced agreement.")
+    st.markdown(
+        "Type a ticker and watch five research agents actually disagree, "
+        "news, fundamentals, technicals, macro, and risk, then see exactly "
+        "how the conflict gets resolved into one final call. No black box, "
+        "no single confident guess pretending there was nothing to argue about."
     )
+    st.caption("Enter a ticker in the sidebar and click **Run Analysis** to get started.")
+    # NOTE (not shown in UI): synthesis runs on Claude Sonnet with extended
+    # thinking, subagents on Claude Haiku, served via AWS Bedrock. Data
+    # sources: Yahoo Finance (price/fundamentals), SEC EDGAR (US filings),
+    # Tavily (live news search). See config.py and the study guide for detail.
     col1, col2, col3 = st.columns(3)
     col1.metric("Subagents", "5", "running in parallel")
-    col2.metric("Model", "Claude API", "Bedrock-ready")
-    col3.metric("Data sources", "3 free", "Yahoo Finance + SEC EDGAR + web")
+    col2.metric("Markets", "US + India", "NSE / BSE supported")
+    col3.metric("Cost to try", "Free", "no signup required")
