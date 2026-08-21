@@ -81,54 +81,58 @@ with st.sidebar:
     mode = st.radio("Analysis Mode", ["Single Stock", "Portfolio"], index=0)
     st.divider()
 
-    if mode == "Single Stock":
-        ticker_input = st.text_input(
-            "Ticker Symbol",
-            value="",
-            placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
-        ).upper().strip()
-        include_portfolio_context = st.checkbox(
-            "Include portfolio context (SA5)",
-            value=False,
-            help="Analyzes how this stock fits the demo portfolio"
+    # Wrapped in a form so pressing Enter in the ticker field submits,
+    # same as clicking the button — st.text_input alone doesn't do this,
+    # only a form's submit button (and Enter within it) does.
+    with st.form("analysis_form"):
+        if mode == "Single Stock":
+            ticker_input = st.text_input(
+                "Ticker Symbol",
+                value="",
+                placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
+            ).upper().strip()
+            include_portfolio_context = st.checkbox(
+                "Include portfolio context (SA5)",
+                value=False,
+                help="Analyzes how this stock fits the demo portfolio"
+            )
+            portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
+
+        else:
+            st.subheader("Portfolio Holdings")
+            st.caption("Enter ticker and weight (%) for each holding")
+
+            portfolio_input = {}
+            default_tickers = list(DEMO_PORTFOLIO.keys())
+            default_weights = [int(w * 100) for w in DEMO_PORTFOLIO.values()]
+
+            for i in range(5):
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    t = st.text_input(
+                        f"Ticker {i+1}",
+                        value=default_tickers[i] if i < len(default_tickers) else "",
+                        key=f"ticker_{i}",
+                        label_visibility="collapsed",
+                        placeholder=f"Ticker {i+1}",
+                    )
+                with col2:
+                    w = st.number_input(
+                        f"Weight {i+1}",
+                        min_value=0, max_value=100,
+                        value=default_weights[i] if i < len(default_weights) else 0,
+                        key=f"weight_{i}",
+                        label_visibility="collapsed",
+                    )
+                if t and w > 0:
+                    portfolio_input[t.upper()] = w / 100
+
+        st.divider()
+        run_button = st.form_submit_button(
+            "🔍 Run Analysis" if mode == "Single Stock" else "🔍 Analyze Portfolio",
+            type="primary",
+            use_container_width=True,
         )
-        portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
-
-    else:
-        st.subheader("Portfolio Holdings")
-        st.caption("Enter ticker and weight (%) for each holding")
-
-        portfolio_input = {}
-        default_tickers = list(DEMO_PORTFOLIO.keys())
-        default_weights = [int(w * 100) for w in DEMO_PORTFOLIO.values()]
-
-        for i in range(5):
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                t = st.text_input(
-                    f"Ticker {i+1}",
-                    value=default_tickers[i] if i < len(default_tickers) else "",
-                    key=f"ticker_{i}",
-                    label_visibility="collapsed",
-                    placeholder=f"Ticker {i+1}",
-                )
-            with col2:
-                w = st.number_input(
-                    f"Weight {i+1}",
-                    min_value=0, max_value=100,
-                    value=default_weights[i] if i < len(default_weights) else 0,
-                    key=f"weight_{i}",
-                    label_visibility="collapsed",
-                )
-            if t and w > 0:
-                portfolio_input[t.upper()] = w / 100
-
-    st.divider()
-    run_button = st.button(
-        "🔍 Run Analysis" if mode == "Single Stock" else "🔍 Analyze Portfolio",
-        type="primary",
-        use_container_width=True,
-    )
 
     st.divider()
     # NOTE (not shown in UI): "Built with Claude API · Multi-subagent
