@@ -655,21 +655,31 @@ if run_button:
         with st.spinner(f"Checking that {ticker_input} is a real ticker..."):
             precheck = get_price_history(ticker_input, days=5)
         if precheck.get("error") or not precheck.get("closes"):
+            genuinely_invalid = not precheck.get("_transient_fetch_failure")
+
             if precheck.get("_transient_fetch_failure"):
-                # A real ticker likely failed due to a temporary data-source
-                # issue (e.g. Yahoo Finance rate-limiting), not because the
-                # ticker itself is invalid. Don't tell the user their real
-                # stock "doesn't exist" when that's not actually true.
-                st.error(
-                    f"Couldn't fetch data for **\"{ticker_input}\"** right now, "
-                    "this is likely a temporary issue with the market data source, "
-                    "not a problem with the ticker itself. Please wait a moment and try again."
-                )
-            else:
+                # Before trusting "transient," confirm Yahoo Finance itself
+                # is actually reachable right now by checking a ticker that
+                # is definitely real. If AAPL succeeds, the original failure
+                # wasn't a platform-wide issue — it really was this specific
+                # ticker (yfinance's error for "no such ticker" can look
+                # identical to a rate-limit failure, so this is the only
+                # reliable way to tell them apart).
+                reference_check = get_price_history("AAPL", days=5)
+                if reference_check.get("closes"):
+                    genuinely_invalid = True
+
+            if genuinely_invalid:
                 st.error(
                     f"**\"{ticker_input}\"** doesn't match a real, tradeable stock. "
                     "Double-check the ticker symbol, for Indian stocks remember the "
                     "`.NS` or `.BO` suffix, e.g. `RELIANCE.NS`."
+                )
+            else:
+                st.error(
+                    f"Couldn't fetch data for **\"{ticker_input}\"** right now, "
+                    "this is likely a temporary issue with the market data source, "
+                    "not a problem with the ticker itself. Please wait a moment and try again."
                 )
             st.stop()
 
