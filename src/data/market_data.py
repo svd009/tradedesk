@@ -128,6 +128,18 @@ def get_fundamentals(ticker: str) -> dict:
     return _cached(f"fundamentals:{ticker}", lambda: _fetch_fundamentals(ticker))
 
 
+def _truncate_at_word(text: str, max_length: int) -> str:
+    """
+    Truncate at the last full word before max_length, with an ellipsis.
+    A hard character cutoff (e.g. "...It also provides sed") reads as
+    broken; this makes it clear the summary was intentionally shortened.
+    """
+    if not text or len(text) <= max_length:
+        return text
+    truncated = text[:max_length].rsplit(" ", 1)[0]
+    return truncated.rstrip(".,;: ") + "…"
+
+
 def _fetch_fundamentals(ticker: str) -> dict:
     try:
         stock = yf.Ticker(ticker)
@@ -172,7 +184,7 @@ def _fetch_fundamentals(ticker: str) -> dict:
             "analyst_target_price": info.get("targetMeanPrice"),
             "analyst_recommendation": info.get("recommendationKey"),
             "recent_earnings_surprises": recent_earnings,
-            "business_summary": info.get("longBusinessSummary", "")[:500],
+            "business_summary": _truncate_at_word(info.get("longBusinessSummary", ""), 500),
             "error": None,
         }
 
