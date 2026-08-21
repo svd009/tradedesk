@@ -655,11 +655,22 @@ if run_button:
         with st.spinner(f"Checking that {ticker_input} is a real ticker..."):
             precheck = get_price_history(ticker_input, days=5)
         if precheck.get("error") or not precheck.get("closes"):
-            st.error(
-                f"**\"{ticker_input}\"** doesn't match a real, tradeable stock. "
-                "Double-check the ticker symbol, for Indian stocks remember the "
-                "`.NS` or `.BO` suffix, e.g. `RELIANCE.NS`."
-            )
+            if precheck.get("_transient_fetch_failure"):
+                # A real ticker likely failed due to a temporary data-source
+                # issue (e.g. Yahoo Finance rate-limiting), not because the
+                # ticker itself is invalid. Don't tell the user their real
+                # stock "doesn't exist" when that's not actually true.
+                st.error(
+                    f"Couldn't fetch data for **\"{ticker_input}\"** right now, "
+                    "this is likely a temporary issue with the market data source, "
+                    "not a problem with the ticker itself. Please wait a moment and try again."
+                )
+            else:
+                st.error(
+                    f"**\"{ticker_input}\"** doesn't match a real, tradeable stock. "
+                    "Double-check the ticker symbol, for Indian stocks remember the "
+                    "`.NS` or `.BO` suffix, e.g. `RELIANCE.NS`."
+                )
             st.stop()
 
         status_container = st.empty()
