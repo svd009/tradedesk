@@ -68,13 +68,16 @@ class NewsAgent(BaseAgent):
 <task>Analyze the current news and sentiment environment for {name} ({ticker}).</task>
 
 <search_instructions>
-Call search_market_news for each of these queries:
-1. "{ticker} earnings results 2025" or "{name} quarterly results"
-2. "{ticker} news analyst upgrade downgrade 2025"
-3. "{name} product announcement strategic news"
-4. "{ticker} stock outlook risk factors 2025"
+Call search_market_news exactly 2 times, no more — but make each query broad
+enough to surface multiple angles at once, don't narrow scope just to hit 2:
+1. "{ticker} {name} earnings results analyst rating 2025" (covers both
+   quarterly results AND analyst upgrades/downgrades in one search)
+2. "{name} product announcement risk factors outlook 2025" (covers both
+   strategic/product news AND risk factors in one search)
 
-Use 2-3 targeted searches to gather comprehensive coverage.
+Two searches, but the same four topics as before — earnings, analyst
+actions, product/strategic news, and risk factors — just combined into
+two broader queries instead of run separately.
 </search_instructions>
 
 Return structured JSON as specified in your system prompt.
