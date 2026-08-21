@@ -21,6 +21,37 @@ import pandas as pd
 from datetime import datetime, timedelta
 from config import PRICE_HISTORY_DAYS
 
+# Yahoo Finance rate-limits aggressively on shared/cloud IPs (Streamlit
+# Community Cloud shares IP ranges across many apps), which shows up as a
+# JSON decode error ("Expecting value: line 1 column 1") rather than a
+# clear "too many requests" message. This is usually transient — a short
+# retry often succeeds where the first attempt didn't.
+_MAX_RETRIES = 3
+_RETRY_DELAY_SECONDS = 2
+
+
+def _with_retry(fetch_fn, ticker: str):
+    """Retry a Yahoo Finance fetch a few times before giving up — but only
+    for actual fetch failures (network errors, rate-limits), not for a
+    ticker that yfinance successfully looked up and found nothing for.
+    The latter is a genuine 'this isn't a real ticker' result; retrying
+    it wastes time and the former needs the _transient_fetch_failure flag
+    so the UI doesn't wrongly tell someone their real stock doesn't exist."""
+    last_error = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            result = fetch_fn()
+            if not result.get("error"):
+                return result
+            if result["error"].startswith("No price data found") or "No data found" in result["error"]:
+                return result  # genuine invalid ticker — don't retry, don't mislabel
+            last_error = result["error"]
+        except Exception as e:
+            last_error = str(e)
+        if attempt < _MAX_RETRIES - 1:
+            time.sleep(_RETRY_DELAY_SECONDS)
+    return {"ticker": ticker, "error": last_error, "_transient_fetch_failure": True}
+
 # ── Lightweight TTL cache ──────────────────────────────────────────────────
 # Multiple subagents (and repeat test runs on the same ticker) were each
 # hitting Yahoo Finance / EDGAR from scratch, adding real seconds to every
@@ -36,7 +67,11 @@ def _cached(key, fetch_fn):
     if hit and (now - hit[0]) < _CACHE_TTL_SECONDS:
         return hit[1]
     value = fetch_fn()
-    _cache[key] = (now, value)
+    # Only cache real successes. Caching an error would mean a transient
+    # Yahoo Finance rate-limit gets "frozen" and re-served to everyone for
+    # the full TTL window, even after Yahoo's own block clears seconds later.
+    if not value.get("error"):
+        _cache[key] = (now, value)
     return value
 
 
@@ -66,7 +101,7 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
           "error": str or None,
         }
     """
-    return _cached(f"price:{ticker}:{days}", lambda: _fetch_price_history(ticker, days))
+    return _cached(f"price:{ticker}:{days}", lambda: _with_retry(lambda: _fetch_price_history(ticker, days), ticker))
 
 
 def _fetch_price_history(ticker: str, days: int) -> dict:
@@ -125,7 +160,7 @@ def get_fundamentals(ticker: str) -> dict:
     that an equity analyst would review — in a format the fundamentals
     subagent can reason over directly.
     """
-    return _cached(f"fundamentals:{ticker}", lambda: _fetch_fundamentals(ticker))
+    return _cached(f"fundamentals:{ticker}", lambda: _with_retry(lambda: _fetch_fundamentals(ticker), ticker))
 
 
 def _truncate_at_word(text: str, max_length: int) -> str:
