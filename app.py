@@ -100,7 +100,7 @@ with st.sidebar:
             )
             portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
             force_refresh = st.checkbox(
-                "Force fresh analysis (ignore cache)",
+                "Force fresh analysis",
                 value=False,
                 help="Analyses are cached once per day (resets 6 AM ET) for speed. "
                      "Check this to run a brand-new analysis right now instead."
