@@ -24,6 +24,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 # through this instead — works identically regardless of MODEL_PROVIDER.
 # Free tier: 1,000 searches/month, no card required. Get a key at tavily.com.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+# Fallback for when Yahoo Finance is rate-limited/unreachable (this happens
+# more often than you'd expect on shared cloud hosting — see market_data.py).
+# Free tier, get a key at twelvedata.com. Only used as a fallback, so its
+# low free-tier request limit (a few requests/minute) is not a bottleneck.
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
 # ── Model provider ────────────────────────────────────────────────────────────
 # "anthropic" → uses Anthropic API directly (paused — out of credits)
@@ -67,6 +72,17 @@ PRICE_HISTORY_DAYS    = 600    # ~20 months — covers back to ~Jan 2025 for the
                                 # (which needs 200+ trading days; 180 days
                                 # was never enough, so that overlay silently
                                 # produced no line at all until this fix)
+SUBAGENT_BATCH_TIME_BUDGET_SECONDS = 45  # max wait for the 5 parallel subagents
+                                # combined — whichever haven't finished by
+                                # then are marked unavailable rather than
+                                # blocking every user on the single slowest one
+
+# Token bucket rate limiter (per browser session — see rate_limiter.py for
+# why session-scoped rather than IP-scoped). 5 requests, refilling 1 every
+# 10 minutes, lets someone run a handful of tickers back-to-back (a normal
+# burst of curiosity) while capping sustained hammering of the button.
+RATE_LIMIT_BUCKET_CAPACITY = 5
+RATE_LIMIT_REFILL_SECONDS_PER_TOKEN = 600
 SEC_FILING_CHARS      = 8000   # max chars to extract from SEC filings
 NEWS_SEARCH_RESULTS   = 5      # number of news results per search query
 
