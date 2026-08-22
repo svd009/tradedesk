@@ -16,10 +16,11 @@ What each subagent uses from here:
 """
 
 import time
+import requests
 import yfinance as yf
 import pandas as pd
 from datetime import datetime, timedelta
-from config import PRICE_HISTORY_DAYS
+from config import PRICE_HISTORY_DAYS, TWELVE_DATA_API_KEY
 
 # Yahoo Finance rate-limits aggressively on shared/cloud IPs (Streamlit
 # Community Cloud shares IP ranges across many apps), which shows up as a
@@ -101,7 +102,94 @@ def get_price_history(ticker: str, days: int = PRICE_HISTORY_DAYS) -> dict:
           "error": str or None,
         }
     """
-    return _cached(f"price:{ticker}:{days}", lambda: _with_retry(lambda: _fetch_price_history(ticker, days), ticker))
+    return _cached(f"price:{ticker}:{days}", lambda: _fetch_with_fallback(ticker, days))
+
+
+def _fetch_with_fallback(ticker: str, days: int) -> dict:
+    """
+    Try Yahoo Finance first (with its own retries). If Yahoo is genuinely
+    unreachable (not just "this ticker doesn't exist"), fall back to
+    Twelve Data before giving up entirely. This is a circuit-breaker-style
+    pattern: primary source first, secondary source only on real failure,
+    the caller never needs to know which one actually answered.
+    """
+    result = _with_retry(lambda: _fetch_price_history(ticker, days), ticker)
+    if not result.get("_transient_fetch_failure"):
+        return result  # success, or a genuine "no such ticker" — either way, done
+
+    if not TWELVE_DATA_API_KEY:
+        return result  # no fallback configured — return Yahoo's honest failure
+
+    fallback_result = _fetch_price_history_twelvedata(ticker, days)
+    if fallback_result.get("closes"):
+        fallback_result["_served_by"] = "twelvedata"  # for debugging/logs only
+        return fallback_result
+
+    return result  # fallback also failed — return Yahoo's original failure info
+
+
+def _twelvedata_symbol(ticker: str) -> tuple:
+    """
+    Translate our yfinance-style ticker (e.g. RELIANCE.NS) into Twelve
+    Data's format, which wants the base symbol and exchange separately
+    (e.g. symbol=RELIANCE, exchange=NSE).
+    """
+    if ticker.endswith(".NS"):
+        return ticker[:-3], "NSE"
+    if ticker.endswith(".BO"):
+        return ticker[:-3], "BSE"
+    return ticker, None  # US ticker — no exchange param needed
+
+
+def _fetch_price_history_twelvedata(ticker: str, days: int) -> dict:
+    try:
+        symbol, exchange = _twelvedata_symbol(ticker)
+        params = {
+            "symbol": symbol,
+            "interval": "1day",
+            "outputsize": min(days, 5000),
+            "apikey": TWELVE_DATA_API_KEY,
+        }
+        if exchange:
+            params["exchange"] = exchange
+
+        resp = requests.get("https://api.twelvedata.com/time_series", params=params, timeout=15)
+        data = resp.json()
+
+        if data.get("status") == "error" or "values" not in data:
+            return {"ticker": ticker, "error": data.get("message", "Twelve Data returned no data")}
+
+        values = list(reversed(data["values"]))  # Twelve Data returns newest-first
+        opens = [float(v["open"]) for v in values]
+        highs = [float(v["high"]) for v in values]
+        lows = [float(v["low"]) for v in values]
+        closes = [float(v["close"]) for v in values]
+        volumes = [int(float(v.get("volume", 0))) for v in values]
+        dates = [v["datetime"] for v in values]
+
+        current_price = closes[-1]
+        start_price = closes[0]
+        price_change_pct = ((current_price - start_price) / start_price) * 100 if start_price else 0.0
+
+        return {
+            "ticker": ticker,
+            "period_days": days,
+            "current_price": round(current_price, 2),
+            "price_change_pct": round(price_change_pct, 2),
+            "high_52w": round(max(highs), 2),
+            "low_52w": round(min(lows), 2),
+            "avg_volume": int(sum(volumes) / len(volumes)) if volumes else 0,
+            "currency": data.get("meta", {}).get("currency", "USD"),
+            "dates": dates,
+            "opens": [round(o, 2) for o in opens],
+            "highs": [round(h, 2) for h in highs],
+            "lows": [round(l, 2) for l in lows],
+            "closes": [round(c, 2) for c in closes],
+            "volumes": volumes,
+            "error": None,
+        }
+    except Exception as e:
+        return {"ticker": ticker, "error": str(e)}
 
 
 def _fetch_price_history(ticker: str, days: int) -> dict:
