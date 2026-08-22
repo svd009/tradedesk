@@ -24,13 +24,15 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.orchestrator.tradedesk_orchestrator import TradeDesk
+from src.orchestrator import analysis_cache
+from src.orchestrator.rate_limiter import get_user_bucket
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history, get_fundamentals
 from src.data.technical_indicators import (
     run_full_technical_analysis, compute_sma_series,
     compute_bollinger_bands, compute_support_resistance,
 )
-from config import DEMO_PORTFOLIO, PRICE_HISTORY_DAYS
+from config import DEMO_PORTFOLIO, PRICE_HISTORY_DAYS, RATE_LIMIT_BUCKET_CAPACITY, RATE_LIMIT_REFILL_SECONDS_PER_TOKEN
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -97,7 +99,12 @@ with st.sidebar:
                 help="Analyzes how this stock fits the demo portfolio"
             )
             portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
-
+            force_refresh = st.checkbox(
+                "Force fresh analysis (ignore cache)",
+                value=False,
+                help="Analyses are cached once per day (resets 6 AM ET) for speed. "
+                     "Check this to run a brand-new analysis right now instead."
+            )
         else:
             st.subheader("Portfolio Holdings")
             st.caption("Enter ticker and weight (%) for each holding")
@@ -291,8 +298,15 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
         showlegend=bool(overlays),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
         xaxis_rangeslider_visible=False,
+        dragmode="pan",  # click-and-drag scrolls the chart directly, no toolbar needed
     )
     fig.update_xaxes(showgrid=False)
+    # Show the most recent 180 days by default — the full ~20 months of
+    # fetched history (PRICE_HISTORY_DAYS) is still in the chart's data,
+    # just outside the initial view. Dragging left reveals it.
+    if len(dates) > 0:
+        default_window_start = dates.max() - pd.Timedelta(days=180)
+        fig.update_xaxes(range=[default_window_start, dates.max()])
     fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0", row=1, col=1)
     if show_volume:
         fig.update_yaxes(showgrid=False, row=2, col=1)
@@ -441,6 +455,18 @@ def render_single_stock_result(result):
     score = rec_data.get("composite_score", 5)
     curr = currency_symbol(get_price_history(ticker, days=PRICE_HISTORY_DAYS).get("currency", "USD"))
 
+    # ── Cache status badge ──────────────────────────────────────────
+    was_cached = st.session_state.get("last_was_cached")
+    cached_at = st.session_state.get("last_cached_at")
+    if was_cached is not None and cached_at is not None:
+        time_str = cached_at.strftime("%I:%M %p ET").lstrip("0")
+        if was_cached:
+            st.caption(f"📋 Using today's cached analysis, generated at {time_str}. "
+                       "Check \"Force fresh analysis\" in the sidebar for a brand-new run.")
+        else:
+            st.caption(f"✨ Fresh analysis just completed at {time_str}. "
+                       "Cached for the rest of today (resets 6 AM ET).")
+
     # ── Header ────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
@@ -460,7 +486,7 @@ def render_single_stock_result(result):
     # ── Price chart + signal summary ──────────────────────────────
     col_chart, col_signals = st.columns([3, 2])
     with col_chart:
-        st.subheader("Price History (since ~Jan 2025)")
+        st.subheader("Price History")
         chart_controls = st.columns([1, 2])
         with chart_controls[0]:
             chart_type = st.radio(
@@ -637,6 +663,20 @@ if "last_result" not in st.session_state:
     st.session_state.last_mode = None
 
 if run_button:
+    bucket = get_user_bucket(
+        st.session_state,
+        capacity=RATE_LIMIT_BUCKET_CAPACITY,
+        refill_seconds_per_token=RATE_LIMIT_REFILL_SECONDS_PER_TOKEN,
+    )
+    if not bucket.try_consume():
+        wait_minutes = max(1, int(bucket.seconds_until_next_token() / 60) + 1)
+        st.error(
+            f"You've hit your request limit for now ({RATE_LIMIT_BUCKET_CAPACITY} analyses). "
+            f"Try again in about {wait_minutes} minute(s), or check back later — "
+            "this resets gradually, not all at once."
+        )
+        st.stop()
+
     if mode == "Single Stock":
         if not ticker_input:
             st.error("Please enter a ticker symbol.")
@@ -698,22 +738,31 @@ if run_button:
             done = sum(1 for v in agent_statuses.values() if "✓" in str(v))
             progress_bar.progress(min(done / 5, 1.0))
 
-        with st.spinner(f"Analyzing {ticker_input}..."):
-            try:
-                td = TradeDesk()
-                result = td.analyze(
-                    ticker=ticker_input,
+        def _run_real_analysis():
+            td = TradeDesk()
+            return td.analyze(
+                ticker=ticker_input,
+                portfolio=portfolio_for_analysis,
+                verbose=False,
+                status_callback=update_status,
+            )
+
+        try:
+            with st.spinner(f"Getting analysis for {ticker_input}..."):
+                result, was_cached, cached_at = analysis_cache.get_or_compute(
+                    ticker_input, _run_real_analysis,
                     portfolio=portfolio_for_analysis,
-                    verbose=False,
-                    status_callback=update_status,
+                    force_refresh=force_refresh,
                 )
-                status_container.empty()
-                progress_bar.empty()
-                st.session_state.last_result = result
-                st.session_state.last_mode = "single"
-            except Exception as e:
-                st.error(f"Analysis failed: {str(e)}")
-                st.exception(e)
+            status_container.empty()
+            progress_bar.empty()
+            st.session_state.last_result = result
+            st.session_state.last_mode = "single"
+            st.session_state.last_was_cached = was_cached
+            st.session_state.last_cached_at = cached_at
+        except Exception as e:
+            st.error(f"Analysis failed: {str(e)}")
+            st.exception(e)
 
     else:
         if not portfolio_input:
