@@ -28,6 +28,7 @@ from src.orchestrator import analysis_cache
 from src.orchestrator.rate_limiter import get_user_bucket
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history, get_fundamentals
+from src.data.ticker_directory import COMPANY_TO_TICKER
 from src.data.technical_indicators import (
     run_full_technical_analysis, compute_sma_series,
     compute_bollinger_bands, compute_support_resistance,
@@ -83,6 +84,27 @@ with st.sidebar:
     mode = st.radio("Analysis Mode", ["Single Stock", "Portfolio"], index=0)
     st.divider()
 
+    if mode == "Single Stock":
+        # Outside the form on purpose — widgets inside st.form don't fire
+        # on_change until the form is submitted, but we want selecting a
+        # company here to update the ticker field immediately, before the
+        # user even clicks Run Analysis.
+        company_options = ["🔍 Search by company name..."] + sorted(COMPANY_TO_TICKER.keys())
+
+        def _apply_company_selection():
+            selected = st.session_state.get("_company_search_select")
+            if selected and selected != company_options[0]:
+                st.session_state["ticker_symbol_input"] = COMPANY_TO_TICKER[selected]
+
+        st.selectbox(
+            "Don't know the ticker? Search by company name",
+            options=company_options,
+            key="_company_search_select",
+            on_change=_apply_company_selection,
+            help="Selecting a company here fills in the ticker field below. "
+                 "You can still type a ticker directly if it's not in this list.",
+        )
+
     # Wrapped in a form so pressing Enter in the ticker field submits,
     # same as clicking the button — st.text_input alone doesn't do this,
     # only a form's submit button (and Enter within it) does.
@@ -91,6 +113,7 @@ with st.sidebar:
             ticker_input = st.text_input(
                 "Ticker Symbol",
                 value="",
+                key="ticker_symbol_input",
                 placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
             ).upper().strip()
             include_portfolio_context = st.checkbox(
@@ -315,7 +338,7 @@ def price_chart(ticker, chart_type="Candlestick", overlays=None, show_volume=Tru
 
 
 # Fields that hold the plain-English writeup for a subagent finding.
-_SUMMARY_FIELDS = ("summary", "rationale")
+_SUMMARY_FIELDS = ("summary", "rationale", "exit_signal_notes")
 # Fields that are just bookkeeping, not shown to the user.
 _HIDDEN_FIELDS = ("agent", "parse_error", "raw_output", "ticker", "company_name")
 # Fields that read best as bullet lists (they're lists of short strings).
@@ -348,11 +371,22 @@ def render_subagent_finding(data: dict, currency: str = "$"):
         st.markdown(pills, unsafe_allow_html=True)
 
     # 3. Numeric/price levels (e.g. technical support & resistance) as metrics.
+    # Fields that are index/ratio numbers, not prices — no currency prefix.
+    _NON_CURRENCY_LEVELS = {"rsi"}
+    # Labels that need finance-standard capitalization rather than
+    # generic title-casing ("Sma 200" -> "200-Day SMA").
+    _LEVEL_LABEL_OVERRIDES = {"sma_200": "200-Day SMA", "sma_50": "50-Day SMA", "sma_20": "20-Day SMA", "rsi": "RSI"}
+
     if isinstance(data.get("key_levels"), dict):
         levels = data["key_levels"]
         cols = st.columns(len(levels))
         for col, (label, val) in zip(cols, levels.items()):
-            col.metric(label.replace("_", " ").title(), f"{currency}{val:,.2f}" if isinstance(val, (int, float)) else val)
+            display_label = _LEVEL_LABEL_OVERRIDES.get(label, label.replace("_", " ").title())
+            if isinstance(val, (int, float)):
+                display_val = f"{val:,.2f}" if label in _NON_CURRENCY_LEVELS else f"{currency}{val:,.2f}"
+            else:
+                display_val = val
+            col.metric(display_label, display_val)
 
     # 4. List fields as actual bullet points, not JSON arrays.
     for field in _LIST_FIELDS:
