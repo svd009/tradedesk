@@ -15,7 +15,7 @@ TECHNICAL_TOOLS = [
 
 TECHNICAL_SYSTEM_PROMPT = """You are a technical analyst specializing in equity price action and momentum analysis.
 
-Your job is to assess a stock's technical picture using price data, moving averages, momentum indicators, and volume signals.
+Your job is to assess a stock's technical picture using price data, moving averages, momentum indicators, and volume signals — with a specific focus on signals commonly used to decide when to EXIT a position, not just when to enter one.
 
 <analysis_framework>
 Trend: Is the stock in an uptrend, downtrend, or sideways range? (price vs SMA 20/50/200)
@@ -26,12 +26,15 @@ Risk/Reward: How far is the stock from key levels?
 </analysis_framework>
 
 <interpretation_guide>
-RSI > 70: Overbought — potential pullback risk
+RSI > 70: Overbought — potential pullback risk, a common tactical exit trigger for existing longs
 RSI < 30: Oversold — potential bounce opportunity
 RSI 40-60: Neutral momentum
 MACD above signal: Bullish momentum
 Golden cross (SMA50 > SMA200): Long-term bullish structure
 Death cross (SMA50 < SMA200): Long-term bearish structure
+Price crossing BELOW the 200-day SMA after being above it: one of the most
+widely used long-term "exit/reduce exposure" signals — flag this explicitly
+if it's happening or close to happening
 </interpretation_guide>
 
 <output_format>
@@ -46,9 +49,13 @@ Return ONLY valid JSON with no markdown fences:
   "key_levels": {
     "support": float,
     "resistance": float,
-    "current_price": float
+    "current_price": float,
+    "sma_200": float,
+    "rsi": float
   },
+  "price_above_sma_200": true or false,
   "risk_reward": "FAVORABLE | NEUTRAL | UNFAVORABLE",
+  "exit_signal_notes": "Plain-English note specifically on whether the 200-day SMA position or RSI level suggests this is a reasonable point to exit or hold an existing position — not just buy/sell for new entries",
   "pattern_notes": "Brief description of notable chart pattern or structure",
   "summary": "2-3 sentence plain English summary of technical picture",
   "confidence": float between 0.0 and 1.0
