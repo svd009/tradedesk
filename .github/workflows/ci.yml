@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  compile-check:
+    name: Compile check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Compile every Python file
+        # A pure syntax/import check — no network calls, no API keys,
+        # 100% deterministic. This is the one thing that should always
+        # block a push if it fails: a syntax error or broken import is
+        # never a "flaky external service" problem, it's a real bug.
+        run: |
+          python -m py_compile $(find . -name "*.py" -not -path "./.git/*")
+          echo "All Python files compiled cleanly."
+
+  smoke-tests:
+    name: Data layer smoke tests (informational)
+    runs-on: ubuntu-latest
+    needs: compile-check
+    continue-on-error: true
+    # These two tests hit real, live Yahoo Finance and SEC EDGAR over the
+    # network — zero AI API cost, but NOT zero network dependency. This
+    # project has already hit real Yahoo Finance rate-limiting on its own
+    # hosting before (see the study guide); the same thing can happen to
+    # a CI runner's IP for reasons that have nothing to do with whether
+    # the code itself is correct. continue-on-error means a failure here
+    # shows up clearly in the run, but doesn't block the compile-check
+    # result or fail the overall workflow — treat a red mark here as
+    # "go check manually," not "something is definitely broken."
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run data layer smoke test (test_data.py)
+        run: python test_data.py
+
+      - name: Run MCP tools smoke test (test_mcp.py)
+        run: python test_mcp.py
