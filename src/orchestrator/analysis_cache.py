@@ -2,7 +2,8 @@
 analysis_cache.py
 ───────────────────
 Daily, shared cache for full TradeDesk analyses, with cache-stampede
-protection.
+protection. Backed by SQLite (via storage.py) so cached results survive
+app restarts, rather than an in-memory dict that would reset every time.
 
 Why this exists:
   Without it, every single request for a ticker re-runs the full 5-agent
@@ -27,7 +28,11 @@ Cache stampede protection:
   trigger their own full analysis — 5x the cost for one answer. A
   per-ticker lock fixes this: the first request acquires the lock and
   does the real work; the other four block on that same lock, then
-  read the now-populated cache instead of duplicating it.
+  read the now-populated cache instead of duplicating it. These locks
+  stay in memory on purpose — a lock only matters while a computation
+  is actively in flight in the current process, there's nothing to
+  persist about it across a restart (whatever was "in flight" when the
+  process died needs to just run again anyway).
 
 Timezone note: uses zoneinfo (Python's built-in timezone library) with
 "America/New_York" rather than a hardcoded EDT/EST offset, so daylight
@@ -40,16 +45,18 @@ import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from src.orchestrator import storage
+
 _RESET_HOUR_ET = 6  # 6 AM US Eastern — the daily reset boundary
 _ET = ZoneInfo("America/New_York")
 
-# ticker+window+portfolio key -> {"result": ..., "cached_at": datetime, "window": str}
-_cache: dict = {}
-_cache_lock = threading.Lock()  # protects the _cache dict and _ticker_locks dict themselves
+_cache_lock = threading.Lock()  # protects _ticker_locks itself (see below)
 
-# One lock per (ticker, window) — created on demand, guarded by _cache_lock
-# so two threads can't race to create two different lock objects for the
-# same key (the classic double-checked-locking pitfall).
+# One lock per (ticker, window) — created on demand, guarded by
+# _cache_lock so two threads can't race to create two different lock
+# objects for the same key (the classic double-checked-locking pitfall).
+# Intentionally still an in-memory dict — see the module docstring above
+# for why locks specifically don't need to persist.
 _ticker_locks: dict = {}
 
 
@@ -66,20 +73,19 @@ def _current_window() -> str:
     return window_date.isoformat()
 
 
-def _cache_key(ticker: str, portfolio: dict = None) -> str:
-    """
-    Cache key includes the ticker, the current window, and a hash of the
-    portfolio (if any) — a stock analyzed with portfolio context gets its
-    own cache entry separate from a plain single-stock lookup, since the
-    portfolio composition changes the Risk agent's output.
-    """
-    window = _current_window()
-    if portfolio:
-        portfolio_sig = hashlib.md5(
-            json.dumps(portfolio, sort_keys=True).encode()
-        ).hexdigest()[:10]
-    else:
-        portfolio_sig = "none"
+def _portfolio_sig(portfolio: dict = None) -> str:
+    """Same portfolio-hashing logic as before, just pulled into its own
+    function now that storage.py needs it as a separate column rather
+    than baked into one combined string key."""
+    if not portfolio:
+        return "none"
+    return hashlib.md5(
+        json.dumps(portfolio, sort_keys=True).encode()
+    ).hexdigest()[:10]
+
+
+def _lock_key(ticker: str, window: str, portfolio_sig: str) -> str:
+    """Key for the in-memory stampede lock only — never touches SQLite."""
     return f"{ticker.upper()}:{window}:{portfolio_sig}"
 
 
@@ -107,36 +113,38 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
     Returns:
         (result: dict, was_cached: bool, cached_at: datetime)
     """
-    key = _cache_key(ticker, portfolio)
+    ticker = ticker.upper()
+    window = _current_window()
+    portfolio_sig = _portfolio_sig(portfolio)
 
     if not force_refresh:
-        with _cache_lock:
-            hit = _cache.get(key)
+        hit = storage.get_cached(ticker, window, portfolio_sig)
         if hit:
-            return hit["result"], True, hit["cached_at"]
+            result, cached_at = hit
+            return result, True, cached_at
 
     # Not cached (or forced) — acquire this ticker's lock before doing the
     # real work, so concurrent requests for the same ticker queue up
     # instead of all running the expensive pipeline simultaneously.
-    lock = _get_ticker_lock(key)
+    lock = _get_ticker_lock(_lock_key(ticker, window, portfolio_sig))
     with lock:
         # Double-checked: another thread may have finished computing this
         # exact key while we were waiting for the lock. If so, use that
         # result instead of computing it a second time.
         if not force_refresh:
-            with _cache_lock:
-                hit = _cache.get(key)
+            hit = storage.get_cached(ticker, window, portfolio_sig)
             if hit:
-                return hit["result"], True, hit["cached_at"]
+                result, cached_at = hit
+                return result, True, cached_at
 
         result = compute_fn()
         cached_at = datetime.now(_ET)
-        with _cache_lock:
-            _cache[key] = {"result": result, "cached_at": cached_at, "window": _current_window()}
+        storage.save_analysis(ticker, window, portfolio_sig, result, cached_at)
         return result, False, cached_at
 
 
 def cache_stats() -> dict:
-    """For debugging/monitoring — how many entries are currently cached."""
-    with _cache_lock:
-        return {"cached_entries": len(_cache), "current_window": _current_window()}
+    """For debugging/monitoring — usage numbers straight from the durable log."""
+    stats = storage.get_usage_stats()
+    stats["current_window"] = _current_window()
+    return stats
