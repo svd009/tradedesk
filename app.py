@@ -89,16 +89,20 @@ with st.sidebar:
         # on_change until the form is submitted, but we want selecting a
         # company here to update the ticker field immediately, before the
         # user even clicks Run Analysis.
-        company_options = ["🔍 Search by company name..."] + sorted(COMPANY_TO_TICKER.keys())
+        company_options = sorted(COMPANY_TO_TICKER.keys())
 
         def _apply_company_selection():
             selected = st.session_state.get("_company_search_select")
-            if selected and selected != company_options[0]:
+            if selected:
                 st.session_state["ticker_symbol_input"] = COMPANY_TO_TICKER[selected]
 
         st.selectbox(
             "Don't know the ticker? Search by company name",
             options=company_options,
+            index=None,  # no option pre-selected — shows `placeholder` below
+                         # instead, styled light/faded by Streamlit itself,
+                         # rather than a fake option sitting in the list
+            placeholder="🔍 Search by company name...",
             key="_company_search_select",
             on_change=_apply_company_selection,
             help="Selecting a company here fills in the ticker field below. "
