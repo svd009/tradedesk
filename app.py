@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.orchestrator.tradedesk_orchestrator import TradeDesk
 from src.orchestrator import analysis_cache
+from src.orchestrator import accuracy_tracker
 from src.orchestrator.rate_limiter import get_user_bucket
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history, get_fundamentals
@@ -81,10 +82,18 @@ with st.sidebar:
     st.caption("Multi-Subagent Equity Research System")
     st.divider()
 
-    mode = st.radio("Analysis Mode", ["Single Stock", "Portfolio"], index=0)
+    mode = st.radio("Analysis Mode", ["Single Stock", "Portfolio", "📊 Track Record"], index=0)
     st.divider()
 
-    if mode == "Single Stock":
+    run_button = False  # only set for real in the form below — Track
+                        # Record mode has no form/button of its own,
+                        # it just renders immediately when selected
+
+    if mode == "📊 Track Record":
+        st.caption("See how many analyses have run, and how the "
+                   "recommendations have actually held up so far.")
+
+    elif mode == "Single Stock":
         # Outside the form on purpose — widgets inside st.form don't fire
         # on_change until the form is submitted, but we want selecting a
         # company here to update the ticker field immediately, before the
@@ -109,64 +118,67 @@ with st.sidebar:
                  "You can still type a ticker directly if it's not in this list.",
         )
 
-    # Wrapped in a form so pressing Enter in the ticker field submits,
-    # same as clicking the button — st.text_input alone doesn't do this,
-    # only a form's submit button (and Enter within it) does.
-    with st.form("analysis_form"):
-        if mode == "Single Stock":
-            ticker_input = st.text_input(
-                "Ticker Symbol",
-                value="",
-                key="ticker_symbol_input",
-                placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
-            ).upper().strip()
-            include_portfolio_context = st.checkbox(
-                "Include portfolio context (SA5)",
-                value=False,
-                help="Analyzes how this stock fits the demo portfolio"
+    # Track Record mode has no form, no ticker input, no run button —
+    # it's a read-only view that renders immediately below once selected.
+    if mode != "📊 Track Record":
+        # Wrapped in a form so pressing Enter in the ticker field submits,
+        # same as clicking the button — st.text_input alone doesn't do this,
+        # only a form's submit button (and Enter within it) does.
+        with st.form("analysis_form"):
+            if mode == "Single Stock":
+                ticker_input = st.text_input(
+                    "Ticker Symbol",
+                    value="",
+                    key="ticker_symbol_input",
+                    placeholder="Add ticker here (e.g. NVDA, AAPL, RELIANCE.NS)",
+                ).upper().strip()
+                include_portfolio_context = st.checkbox(
+                    "Include portfolio context (SA5)",
+                    value=False,
+                    help="Analyzes how this stock fits the demo portfolio"
+                )
+                portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
+                force_refresh = st.checkbox(
+                    "Force fresh analysis",
+                    value=False,
+                    help="Analyses are cached once per day (resets 6 AM ET) for speed. "
+                         "Check this to run a brand-new analysis right now instead."
+                )
+            else:
+                st.subheader("Portfolio Holdings")
+                st.caption("Enter ticker and weight (%) for each holding")
+
+                portfolio_input = {}
+                default_tickers = list(DEMO_PORTFOLIO.keys())
+                default_weights = [int(w * 100) for w in DEMO_PORTFOLIO.values()]
+
+                for i in range(5):
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        t = st.text_input(
+                            f"Ticker {i+1}",
+                            value=default_tickers[i] if i < len(default_tickers) else "",
+                            key=f"ticker_{i}",
+                            label_visibility="collapsed",
+                            placeholder=f"Ticker {i+1}",
+                        )
+                    with col2:
+                        w = st.number_input(
+                            f"Weight {i+1}",
+                            min_value=0, max_value=100,
+                            value=default_weights[i] if i < len(default_weights) else 0,
+                            key=f"weight_{i}",
+                            label_visibility="collapsed",
+                        )
+                    if t and w > 0:
+                        portfolio_input[t.upper()] = w / 100
+
+            st.divider()
+            run_button = st.form_submit_button(
+                "🔍 Run Analysis" if mode == "Single Stock" else "🔍 Analyze Portfolio",
+                type="primary",
+                use_container_width=True,
             )
-            portfolio_for_analysis = DEMO_PORTFOLIO if include_portfolio_context else None
-            force_refresh = st.checkbox(
-                "Force fresh analysis",
-                value=False,
-                help="Analyses are cached once per day (resets 6 AM ET) for speed. "
-                     "Check this to run a brand-new analysis right now instead."
-            )
-        else:
-            st.subheader("Portfolio Holdings")
-            st.caption("Enter ticker and weight (%) for each holding")
-
-            portfolio_input = {}
-            default_tickers = list(DEMO_PORTFOLIO.keys())
-            default_weights = [int(w * 100) for w in DEMO_PORTFOLIO.values()]
-
-            for i in range(5):
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    t = st.text_input(
-                        f"Ticker {i+1}",
-                        value=default_tickers[i] if i < len(default_tickers) else "",
-                        key=f"ticker_{i}",
-                        label_visibility="collapsed",
-                        placeholder=f"Ticker {i+1}",
-                    )
-                with col2:
-                    w = st.number_input(
-                        f"Weight {i+1}",
-                        min_value=0, max_value=100,
-                        value=default_weights[i] if i < len(default_weights) else 0,
-                        key=f"weight_{i}",
-                        label_visibility="collapsed",
-                    )
-                if t and w > 0:
-                    portfolio_input[t.upper()] = w / 100
-
-        st.divider()
-        run_button = st.form_submit_button(
-            "🔍 Run Analysis" if mode == "Single Stock" else "🔍 Analyze Portfolio",
-            type="primary",
-            use_container_width=True,
-        )
 
     st.divider()
     # NOTE (not shown in UI): "Built with Claude API · Multi-subagent
@@ -841,11 +853,69 @@ if run_button:
                 st.error(f"Analysis failed: {str(e)}")
                 st.exception(e)
 
+# ── Track Record: usage + accuracy, rendered immediately when selected ──────
+if mode == "📊 Track Record":
+    st.title("📊 Track Record")
+    st.caption("The receipts — how much this has actually been used, "
+               "and how the recommendations have held up so far.")
+
+    usage = analysis_cache.cache_stats()
+    col1, col2 = st.columns(2)
+    col1.metric("Total analyses run", usage["total_analyses"])
+    col2.metric("Current cache window", usage["current_window"])
+
+    if usage["most_popular"]:
+        st.markdown("**Most-analyzed tickers**")
+        for ticker, count in usage["most_popular"]:
+            st.markdown(f"- {ticker}: {count} time(s)")
+    else:
+        st.caption("No analyses recorded yet.")
+
+    st.divider()
+    st.subheader("Accuracy")
+    st.caption(
+        "A recommendation only gets checked once it's had at least a week to "
+        "play out. BUY/SELL need at least a 2% move in the right direction to "
+        "count as correct; HOLD counts as correct if price stayed within 5%. "
+        "This is a simple, transparent directional check, not a full "
+        "quantitative backtest."
+    )
+
+    with st.spinner("Checking recommendations against real price history..."):
+        report = accuracy_tracker.compute_track_record()
+
+    if report["total_checked"] == 0:
+        st.info(
+            "Nothing old enough to check yet. Recommendations need at least "
+            "7 days of real market history before they can be judged."
+        )
+    else:
+        col1, col2, col3 = st.columns(3)
+        col1.metric(
+            "Directional accuracy",
+            f"{report['accuracy_pct']}%" if report["accuracy_pct"] is not None else "N/A",
+        )
+        col2.metric("Correct calls", report["correct"])
+        col3.metric("Incorrect calls", report["incorrect"])
+        if report["inconclusive"]:
+            st.caption(f"{report['inconclusive']} call(s) were too close to "
+                       f"call either way and aren't counted in the accuracy %.")
+
+        with st.expander(f"See all {report['total_checked']} checked recommendations"):
+            for entry in report["details"]:
+                icon = {"correct": "✅", "incorrect": "❌", "inconclusive": "➖"}[entry["verdict"]]
+                st.markdown(
+                    f"{icon} **{entry['ticker']}** — {entry['recommendation']} "
+                    f"on {entry['cached_at'][:10]}: "
+                    f"${entry['baseline_price']:.2f} → ${entry['current_price']:.2f} "
+                    f"({entry['pct_change']:+.1f}%)"
+                )
+
 # ── Render whatever the last completed analysis was ─────────────────────────
 # This runs on every rerun, including ones triggered by chart controls, so
 # those interactions redraw instantly from the stored result instead of
 # re-running the 5-subagent pipeline or losing the result entirely.
-if st.session_state.last_result is not None:
+elif st.session_state.last_result is not None:
     if st.session_state.last_mode == "single":
         render_single_stock_result(st.session_state.last_result)
     else:
