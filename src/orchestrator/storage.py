@@ -180,7 +180,16 @@ def get_cached(ticker: str, window_key: str, portfolio_sig: str):
 
 def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
                   result: dict, cached_at: datetime):
-    """Save (or overwrite, on a forced refresh) a freshly-computed analysis."""
+    """
+    Save (or overwrite, on a forced refresh) a freshly-computed analysis.
+
+    Also captures the stock's price at the moment of this recommendation
+    (baseline_price) — without this, there's no fixed point to measure
+    "did the price move the way the recommendation implied" against
+    later. Pulled from the Technical subagent's own findings, since it
+    already fetches current price as part of its normal work — no extra
+    API call needed to get this.
+    """
     window_sig = f"{window_key}#{portfolio_sig}"
     recommendation = None
     confidence = None
@@ -191,6 +200,14 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
     except Exception:
         pass
 
+    baseline_price = None
+    try:
+        technical = result.get("subagent_findings", {}).get("technical", {})
+        baseline_price = technical.get("key_levels", {}).get("current_price")
+    except Exception:
+        pass  # Technical subagent may have failed/timed out — accuracy
+              # tracking just can't check this particular entry later
+
     table = _get_table()
     result_json = json.dumps(result, default=str)
 
@@ -198,25 +215,66 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
         with _dynamo_lock:
             _memory_fallback[(ticker, window_sig)] = {
                 "result": result, "cached_at": cached_at,
+                "recommendation": recommendation, "confidence": confidence,
+                "baseline_price": baseline_price,
             }
         return
 
     try:
-        table.put_item(Item={
+        item = {
             "ticker": ticker,
             "window_sig": window_sig,
             "recommendation": recommendation or "UNKNOWN",
             "confidence": str(confidence) if confidence is not None else "0",
             "result_json": result_json,
             "cached_at": cached_at.isoformat(),
-        })
+        }
+        if baseline_price is not None:
+            item["baseline_price"] = str(baseline_price)  # stored as a
+                                                            # string to sidestep
+                                                            # DynamoDB's Decimal-
+                                                            # only Number typing
+        table.put_item(Item=item)
     except Exception as e:
         print(f"  [storage] DynamoDB write failed ({e}) — "
               f"caching in-memory for this session only")
         with _dynamo_lock:
             _memory_fallback[(ticker, window_sig)] = {
                 "result": result, "cached_at": cached_at,
+                "recommendation": recommendation, "confidence": confidence,
+                "baseline_price": baseline_price,
             }
+
+
+def get_all_analyses() -> list:
+    """
+    Every stored analysis, with the fields the accuracy tracker needs
+    (ticker, recommendation, confidence, baseline_price, cached_at).
+    Same full-table-Scan caveat as get_usage_stats() — fine at this
+    app's scale, not the approach for a much bigger table.
+    """
+    table = _get_table()
+    if table is None:
+        with _dynamo_lock:
+            return [
+                {
+                    "ticker": k[0],
+                    "recommendation": v.get("recommendation"),
+                    "confidence": v.get("confidence"),
+                    "baseline_price": v.get("baseline_price"),
+                    "cached_at": v["cached_at"].isoformat(),
+                }
+                for k, v in _memory_fallback.items()
+            ]
+
+    try:
+        response = table.scan(
+            ProjectionExpression="ticker, recommendation, confidence, baseline_price, cached_at"
+        )
+        return response.get("Items", [])
+    except Exception as e:
+        print(f"  [storage] DynamoDB scan failed ({e})")
+        return []
 
 
 def get_usage_stats() -> dict:
