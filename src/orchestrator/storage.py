@@ -54,6 +54,14 @@ from datetime import datetime
 
 from config import DYNAMODB_TABLE_NAME, BEDROCK_REGION
 
+# A reserved partition key value, never a real ticker, used to hold small
+# aggregate counter rows (see _increment_counters / get_usage_stats).
+# Living in the same table under its own partition means a Query for
+# "give me all the counters" only ever reads that one small partition —
+# genuinely cheap — rather than scanning every analysis ever stored.
+_STATS_PARTITION = "__STATS__"
+_TOTAL_COUNTER_SIG = "TOTAL"
+
 _dynamo_lock = threading.Lock()
 _table = None
 _dynamo_available = False
@@ -101,17 +109,17 @@ def _get_table():
                     # Provisioned mode, not on-demand (PAY_PER_REQUEST) —
                     # DynamoDB's Always Free tier (25 RCU/25 WCU, permanent,
                     # never expires) only applies to provisioned capacity.
-                    # On-demand mode bills per request from the first call,
-                    # with no free allowance on requests at all, just
-                    # storage. 1/1 capacity comfortably covers this app's
-                    # actual traffic (roughly one write per fresh analysis,
-                    # a handful of reads per lookup); raise this later only
-                    # if you ever see ProvisionedThroughputExceededException
-                    # in the logs.
+                    # 5 RCU / 3 WCU — bumped up from an initial 1/1, which
+                    # turned out to be too low: DynamoDB Scan operations
+                    # (used for usage stats and accuracy tracking) charge
+                    # capacity based on the SIZE of data read, not row
+                    # count, and each stored analysis can be 5-20KB, so
+                    # even a modest history would have exceeded 1 RCU on
+                    # a single Scan. Still comfortably within the free tier.
                     BillingMode="PROVISIONED",
                     ProvisionedThroughput={
-                        "ReadCapacityUnits": 1,
-                        "WriteCapacityUnits": 1,
+                        "ReadCapacityUnits": 5,
+                        "WriteCapacityUnits": 3,
                     },
                 )
                 table.wait_until_exists()
@@ -153,6 +161,31 @@ def init_db():
     connecting/creating the table happens lazily in _get_table() on
     first real use instead, so this is just a no-op trigger."""
     _get_table()
+
+
+def _increment_counters(table, ticker: str):
+    """
+    Atomically bump two small counter rows: one global total, one for
+    this specific ticker. DynamoDB's ADD on a numeric attribute creates
+    the item with that starting value if it doesn't exist yet — no
+    separate initialization step needed. These rows are tiny (a ticker
+    name and a number), completely unlike the 5-20KB analysis rows, so
+    reading all of them back later is cheap.
+    """
+    try:
+        table.update_item(
+            Key={"ticker": _STATS_PARTITION, "window_sig": _TOTAL_COUNTER_SIG},
+            UpdateExpression="ADD analysis_count :incr",
+            ExpressionAttributeValues={":incr": 1},
+        )
+        table.update_item(
+            Key={"ticker": _STATS_PARTITION, "window_sig": f"TICKER#{ticker}"},
+            UpdateExpression="ADD analysis_count :incr SET ticker_name = :t",
+            ExpressionAttributeValues={":incr": 1, ":t": ticker},
+        )
+    except Exception as e:
+        print(f"  [storage] Counter update failed ({e}) — "
+              f"usage stats may undercount this entry")
 
 
 def get_cached(ticker: str, window_key: str, portfolio_sig: str):
@@ -235,6 +268,7 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
                                                             # DynamoDB's Decimal-
                                                             # only Number typing
         table.put_item(Item=item)
+        _increment_counters(table, ticker)
     except Exception as e:
         print(f"  [storage] DynamoDB write failed ({e}) — "
               f"caching in-memory for this session only")
@@ -250,8 +284,16 @@ def get_all_analyses() -> list:
     """
     Every stored analysis, with the fields the accuracy tracker needs
     (ticker, recommendation, confidence, baseline_price, cached_at).
-    Same full-table-Scan caveat as get_usage_stats() — fine at this
-    app's scale, not the approach for a much bigger table.
+
+    This genuinely needs a Scan, not a Query — the accuracy tracker has
+    to inspect every historical row's actual data (was this specific
+    call right or wrong), which aggregate counters can't answer. Now
+    protected by the bumped 5 RCU capacity (see _get_table), but still
+    worth knowing this is the one place in this file that doesn't scale
+    indefinitely — a much larger history would eventually want a
+    different approach (e.g. a GSI on cached_at to page through only
+    old-enough rows, or marking rows "checked" once judged so they're
+    never re-scanned).
     """
     table = _get_table()
     if table is None:
@@ -269,7 +311,9 @@ def get_all_analyses() -> list:
 
     try:
         response = table.scan(
-            ProjectionExpression="ticker, recommendation, confidence, baseline_price, cached_at"
+            ProjectionExpression="ticker, recommendation, confidence, baseline_price, cached_at",
+            FilterExpression="ticker <> :stats",
+            ExpressionAttributeValues={":stats": _STATS_PARTITION},
         )
         return response.get("Items", [])
     except Exception as e:
@@ -279,12 +323,14 @@ def get_all_analyses() -> list:
 
 def get_usage_stats() -> dict:
     """
-    Basic usage numbers. Uses a full table Scan — fine at this app's
-    realistic scale (hundreds to low thousands of rows), but worth
-    knowing this wouldn't be the right approach at a much larger scale,
-    a real analytics need at that point would call for a separate
-    aggregation table updated incrementally rather than scanning
-    everything on each stats request.
+    Basic usage numbers, read from the small counter rows maintained by
+    _increment_counters — a Query against one partition, not a Scan of
+    every analysis ever stored. This is the fix for a real capacity
+    problem the original Scan-based version had: Scan charges by the
+    size of data read, and each analysis row can be 5-20KB, so even a
+    modest history would exceed a small provisioned-capacity budget.
+    Counter rows are tiny, reading all of them stays cheap indefinitely,
+    regardless of how large the analyses table itself grows.
     """
     table = _get_table()
     if table is None:
@@ -297,13 +343,22 @@ def get_usage_stats() -> dict:
         return {"total_analyses": len(tickers), "most_popular": popular}
 
     try:
-        response = table.scan(ProjectionExpression="ticker")
-        tickers = [item["ticker"] for item in response.get("Items", [])]
-        counts = {}
-        for t in tickers:
-            counts[t] = counts.get(t, 0) + 1
-        popular = sorted(counts.items(), key=lambda x: -x[1])[:10]
-        return {"total_analyses": len(tickers), "most_popular": popular}
+        response = table.query(
+            KeyConditionExpression="ticker = :stats",
+            ExpressionAttributeValues={":stats": _STATS_PARTITION},
+        )
+        items = response.get("Items", [])
+
+        total = 0
+        ticker_counts = []
+        for item in items:
+            if item["window_sig"] == _TOTAL_COUNTER_SIG:
+                total = int(item.get("analysis_count", 0))
+            elif item["window_sig"].startswith("TICKER#"):
+                ticker_counts.append((item.get("ticker_name", "?"), int(item.get("analysis_count", 0))))
+
+        popular = sorted(ticker_counts, key=lambda x: -x[1])[:10]
+        return {"total_analyses": total, "most_popular": popular}
     except Exception as e:
-        print(f"  [storage] DynamoDB scan failed ({e})")
+        print(f"  [storage] DynamoDB query failed ({e})")
         return {"total_analyses": 0, "most_popular": []}
