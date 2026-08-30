@@ -30,6 +30,11 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 # low free-tier request limit (a few requests/minute) is not a bottleneck.
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
+# Persistent storage for the daily analysis cache — same AWS account and
+# region already used for Bedrock, no separate credentials needed. Table
+# is auto-created on first run if it doesn't already exist (see storage.py).
+DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "tradedesk_analyses")
+
 # ── Model provider ────────────────────────────────────────────────────────────
 # "anthropic" → uses Anthropic API directly (paused — out of credits)
 # "bedrock"   → uses AWS Bedrock (active — running on AWS free credit)
