@@ -50,10 +50,11 @@ MODEL_REASONING = "claude-sonnet-4-6"
 # These are cross-region inference profile IDs, not raw model IDs — Bedrock
 # rejects on-demand InvokeModel calls to the raw model ID for these newer
 # Claude models and requires an inference profile instead.
-# Using the US regional profile (not Global) — the Global profile returned
-# ValidationException on every request that included tools, while non-tool
-# requests (e.g. synthesis) worked fine on Global. Testing whether tool use
-# is supported on the US profile instead.
+# Using the US regional profile (not Global) — the Global profile
+# rejected every request that included tools (ValidationException),
+# confirmed and fixed early in this project; the US profile has been
+# working correctly ever since via the Converse API path in
+# src/client/model_client.py.
 BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
 BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
@@ -89,7 +90,6 @@ SUBAGENT_BATCH_TIME_BUDGET_SECONDS = 45  # max wait for the 5 parallel subagents
 RATE_LIMIT_BUCKET_CAPACITY = 5
 RATE_LIMIT_REFILL_SECONDS_PER_TOKEN = 600
 SEC_FILING_CHARS      = 8000   # max chars to extract from SEC filings
-NEWS_SEARCH_RESULTS   = 5      # number of news results per search query
 
 # ── Portfolio defaults ────────────────────────────────────────────────────────
 # Used as example portfolio in demo mode
@@ -99,11 +99,6 @@ DEMO_PORTFOLIO = {
     "AAPL": 0.20,
     "JPM":  0.20,
 }
-
-# ── Recommendation thresholds ─────────────────────────────────────────────────
-BUY_THRESHOLD  = 0.65   # composite score >= this → BUY
-SELL_THRESHOLD = 0.35   # composite score <= this → SELL
-                         # between thresholds → HOLD
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 EVAL_PASS_THRESHOLD = 7.0   # out of 10
