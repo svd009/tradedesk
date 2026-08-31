@@ -858,6 +858,11 @@ if mode == "📊 Track Record":
     st.title("📊 Track Record")
     st.caption("The receipts — how much this has actually been used, "
                "and how the recommendations have held up so far.")
+    st.warning(
+        "⚠️ **Not investment advice.** These numbers describe past pattern-matching, "
+        "not a guarantee of future results. Please consult your CA or a licensed "
+        "financial adviser before making any investment decision."
+    )
 
     usage = analysis_cache.cache_stats()
     col1, col2 = st.columns(2)
