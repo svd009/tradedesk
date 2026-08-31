@@ -4,12 +4,16 @@ test_subagents.py
 Smoke test for Phase 3 — verifies all 5 subagents produce
 correctly structured output.
 
-COST NOTE: Each subagent makes real Claude API calls.
-To keep cost minimal (~$0.05-0.10), this test runs only
-SA2 (Fundamentals) and SA3 (Technical) by default — the two
-that don't use web search and are fastest/cheapest.
+COST NOTE: Each subagent makes real Claude model calls. If MODEL_PROVIDER
+is "bedrock" (the current default), this draws against your AWS Bedrock
+credit, not a direct Anthropic bill — the dollar figures below were
+written against the direct Anthropic API's pricing, kept here as a
+rough sense of scale rather than a literal cost today.
+To keep cost minimal (~$0.05-0.10 in direct-API terms), this test runs
+only SA2 (Fundamentals) and SA3 (Technical) by default — the two that
+don't use web search and are fastest/cheapest.
 
-Run with --all to test all 5 subagents (~$0.15-0.25 total).
+Run with --all to test all 5 subagents (~$0.15-0.25 in direct-API terms).
 """
 
 import sys
