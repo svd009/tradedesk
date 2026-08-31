@@ -3,9 +3,13 @@ test_orchestrator.py
 ─────────────────────
 Smoke test for Phase 4 — verifies parallel execution and synthesis.
 
-COST NOTE: This test makes real Claude API calls.
-  - Capped run (2 subagents + synthesis): ~$0.10-0.20
-  - Full run (5 subagents + synthesis): ~$0.25-0.50
+COST NOTE: This test makes real Claude model calls. If MODEL_PROVIDER
+is "bedrock" (the current default in config.py), this draws against
+your AWS Bedrock credit/usage, not a direct Anthropic bill — a
+different cost model than the dollar estimates below assumed when
+this was written against the direct Anthropic API.
+  - Capped run (2 subagents + synthesis): ~$0.10-0.20 in direct-API terms
+  - Full run (5 subagents + synthesis): ~$0.25-0.50 in direct-API terms
 
 Runs 2 subagents by default to save credits.
 Run with --full for all 5 subagents.
