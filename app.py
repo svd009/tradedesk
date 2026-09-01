@@ -521,17 +521,11 @@ def render_single_stock_result(result):
     score = rec_data.get("composite_score", 5)
     curr = currency_symbol(get_price_history(ticker, days=PRICE_HISTORY_DAYS).get("currency", "USD"))
 
-    # ── Cache status badge ──────────────────────────────────────────
-    was_cached = st.session_state.get("last_was_cached")
-    cached_at = st.session_state.get("last_cached_at")
-    if was_cached is not None and cached_at is not None:
-        time_str = cached_at.strftime("%I:%M %p ET").lstrip("0")
-        if was_cached:
-            st.caption(f"📋 Using today's cached analysis, generated at {time_str}. "
-                       "Check \"Force fresh analysis\" in the sidebar for a brand-new run.")
-        else:
-            st.caption(f"✨ Fresh analysis just completed at {time_str}. "
-                       "Cached for the rest of today (resets 6 AM ET).")
+    st.warning(
+        "⚠️ **Not investment advice.** This is AI-generated pattern-matching, "
+        "not a guarantee of future results. Please consult your CA or a licensed "
+        "financial adviser before making any investment decision."
+    )
 
     # ── Header ────────────────────────────────────────────────────
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -684,6 +678,11 @@ def render_single_stock_result(result):
 
 
 def render_portfolio_result(result):
+    st.warning(
+        "⚠️ **Not investment advice.** This is AI-generated pattern-matching, "
+        "not a guarantee of future results. Please consult your CA or a licensed "
+        "financial adviser before making any investment decision."
+    )
     st.subheader("Portfolio Analysis Summary")
     recs = result["recommendations"]
     avg = result["portfolio_avg_score"]
