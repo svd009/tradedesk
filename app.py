@@ -931,6 +931,31 @@ if mode == "📊 Track Record":
                     f"({entry['pct_change']:+.1f}%)"
                 )
 
+        st.divider()
+        st.subheader("Is the confidence number actually meaningful?")
+        st.caption(
+            "The AI states a confidence level with every recommendation, but that's "
+            "the model's own judgment, not a calibrated statistic. This checks it "
+            "against real outcomes: when it says '90% confident,' is it actually "
+            "right 90% of the time?"
+        )
+        calibration = accuracy_tracker.compute_calibration_report()
+        if not calibration["buckets"]:
+            st.caption("Not enough judged calls yet to check calibration.")
+        else:
+            for b in calibration["buckets"]:
+                gap = b["gap"]
+                if gap < -10:
+                    verdict = "⚠️ Overconfident at this level"
+                elif gap > 10:
+                    verdict = "Underconfident at this level"
+                else:
+                    verdict = "Reasonably well-calibrated"
+                st.markdown(
+                    f"**{b['confidence_bucket']} confidence** (n={b['sample_size']}): "
+                    f"actually correct {b['actual_accuracy_pct']}% of the time — {verdict}"
+                )
+
 # ── Render whatever the last completed analysis was ─────────────────────────
 # This runs on every rerun, including ones triggered by chart controls, so
 # those interactions redraw instantly from the stored result instead of
@@ -957,3 +982,4 @@ else:
     col1.metric("Subagents", "5", "running in parallel")
     col2.metric("Markets", "US + India", "NSE / BSE supported")
     col3.metric("Cost to try", "Free", "no signup required")
+    
