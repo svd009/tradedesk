@@ -139,3 +139,76 @@ def compute_track_record(min_age_days: int = DEFAULT_MIN_AGE_DAYS) -> dict:
         "skipped_price_unavailable": skipped_price_unavailable,
         "details": sorted(checked, key=lambda c: c["cached_at"], reverse=True),
     }
+
+
+# Confidence buckets to group checked recommendations into. Each is
+# (label, lower bound inclusive, upper bound exclusive except the last).
+_CONFIDENCE_BUCKETS = [
+    ("50-60%", 0.50, 0.60),
+    ("60-70%", 0.60, 0.70),
+    ("70-80%", 0.70, 0.80),
+    ("80-90%", 0.80, 0.90),
+    ("90-100%", 0.90, 1.01),  # 1.01 so a stated confidence of exactly 1.0 is included
+]
+
+
+def compute_calibration_report(min_age_days: int = DEFAULT_MIN_AGE_DAYS) -> dict:
+    """
+    Checks whether the model's own stated confidence is actually
+    meaningful: when it says "70% confident," is it right about 70% of
+    the time? Groups every judged (correct/incorrect, not inconclusive)
+    recommendation by its stated confidence, then compares each
+    bucket's REAL accuracy rate against what that confidence level
+    implies.
+
+    A well-calibrated model's buckets should roughly track the diagonal
+    (70-80% confidence calls right roughly 70-80% of the time). A
+    negative "gap" means overconfidence — the model claims more
+    certainty than its track record actually supports at that level.
+    A positive gap means underconfidence — it's more often right than
+    it claims to be.
+
+    This is deliberately a small, transparent bucket-based check, not
+    a full statistical calibration curve (e.g. no confidence intervals
+    on the gap itself) — meaningful with the sample sizes this app is
+    realistically going to have for a while, and easy to explain at a
+    glance, which matters more than statistical sophistication here.
+    """
+    track_record = compute_track_record(min_age_days)
+
+    bucket_counts = {label: {"correct": 0, "incorrect": 0} for label, _, _ in _CONFIDENCE_BUCKETS}
+
+    for entry in track_record["details"]:
+        if entry["verdict"] not in ("correct", "incorrect"):
+            continue  # inconclusive calls were never a clean test of confidence either
+        conf = entry.get("confidence")
+        try:
+            conf = float(conf)
+        except (TypeError, ValueError):
+            continue
+
+        for label, lo, hi in _CONFIDENCE_BUCKETS:
+            if lo <= conf < hi:
+                bucket_counts[label][entry["verdict"]] += 1
+                break
+
+    buckets = []
+    for label, lo, hi in _CONFIDENCE_BUCKETS:
+        counts = bucket_counts[label]
+        total = counts["correct"] + counts["incorrect"]
+        if total == 0:
+            continue
+        actual_accuracy = round(100 * counts["correct"] / total, 1)
+        stated_midpoint = round((lo + min(hi, 1.0)) / 2 * 100, 1)
+        buckets.append({
+            "confidence_bucket": label,
+            "stated_confidence_midpoint": stated_midpoint,
+            "actual_accuracy_pct": actual_accuracy,
+            "sample_size": total,
+            "gap": round(actual_accuracy - stated_midpoint, 1),
+        })
+
+    return {
+        "buckets": buckets,
+        "total_judged": sum(b["sample_size"] for b in buckets),
+    }
