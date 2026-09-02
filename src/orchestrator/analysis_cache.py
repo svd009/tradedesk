@@ -46,8 +46,11 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from src.orchestrator import storage
+from src.orchestrator.concurrency_limiter import ConcurrencyLimiter, ConcurrencyLimitExceeded
+from config import CONCURRENCY_CAP
 
 _RESET_HOUR_ET = 6  # 6 AM US Eastern — the daily reset boundary
+_concurrency_limiter = ConcurrencyLimiter(max_concurrent=CONCURRENCY_CAP)
 _ET = ZoneInfo("America/New_York")
 
 _cache_lock = threading.Lock()  # protects _ticker_locks itself (see below)
@@ -112,6 +115,12 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
 
     Returns:
         (result: dict, was_cached: bool, cached_at: datetime)
+
+    Raises:
+        ConcurrencyLimitExceeded: if the global concurrency cap is
+        already at capacity and this would be a genuinely new (non-cached)
+        computation. Cache hits are never subject to this — see the
+        module docstring for why.
     """
     ticker = ticker.upper()
     window = _current_window()
@@ -123,24 +132,55 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
             result, cached_at = hit
             return result, True, cached_at
 
-    # Not cached (or forced) — acquire this ticker's lock before doing the
-    # real work, so concurrent requests for the same ticker queue up
-    # instead of all running the expensive pipeline simultaneously.
-    lock = _get_ticker_lock(_lock_key(ticker, window, portfolio_sig))
-    with lock:
-        # Double-checked: another thread may have finished computing this
-        # exact key while we were waiting for the lock. If so, use that
-        # result instead of computing it a second time.
-        if not force_refresh:
-            hit = storage.get_cached(ticker, window, portfolio_sig)
-            if hit:
-                result, cached_at = hit
-                return result, True, cached_at
+    # This is a genuine cache miss — a real, expensive analysis is about
+    # to run. Check the GLOBAL concurrency cap before even attempting the
+    # per-ticker lock, so a rejection is fast and doesn't contend for a
+    # lock that was never the actual bottleneck.
+    if not _concurrency_limiter.try_acquire():
+        raise ConcurrencyLimitExceeded(
+            f"Concurrency cap reached ({CONCURRENCY_CAP} analyses running at once)."
+        )
 
-        result = compute_fn()
-        cached_at = datetime.now(_ET)
-        storage.save_analysis(ticker, window, portfolio_sig, result, cached_at)
-        return result, False, cached_at
+    try:
+        # Acquire this ticker's lock before doing the real work, so
+        # concurrent requests for the same ticker queue up instead of
+        # all running the expensive pipeline simultaneously.
+        lock = _get_ticker_lock(_lock_key(ticker, window, portfolio_sig))
+        with lock:
+            # Double-checked: another thread may have finished computing
+            # this exact key while we were waiting for the lock. If so,
+            # use that result instead of computing it a second time.
+            if not force_refresh:
+                hit = storage.get_cached(ticker, window, portfolio_sig)
+                if hit:
+                    result, cached_at = hit
+                    return result, True, cached_at
+
+            result = compute_fn()
+            cached_at = datetime.now(_ET)
+            storage.save_analysis(ticker, window, portfolio_sig, result, cached_at)
+            return result, False, cached_at
+    finally:
+        _concurrency_limiter.release()
+
+
+def concurrency_status() -> tuple:
+    """(currently running analyses, max capacity) — for a status display."""
+    return _concurrency_limiter.current_load()
+
+
+def try_acquire_concurrency_slot() -> bool:
+    """
+    For call sites that don't go through get_or_compute (e.g. Portfolio
+    mode, which isn't cached) but still need to respect the same global
+    concurrency cap, since a portfolio analysis is just as expensive as
+    a single-stock one.
+    """
+    return _concurrency_limiter.try_acquire()
+
+
+def release_concurrency_slot():
+    _concurrency_limiter.release()
 
 
 def cache_stats() -> dict:
