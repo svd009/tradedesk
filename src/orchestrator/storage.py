@@ -61,6 +61,11 @@ from config import DYNAMODB_TABLE_NAME, BEDROCK_REGION
 # genuinely cheap — rather than scanning every analysis ever stored.
 _STATS_PARTITION = "__STATS__"
 _TOTAL_COUNTER_SIG = "TOTAL"
+# Another reserved partition, this one for daily screener snapshot rows —
+# same table, same "reserve a partition key, Query instead of Scan"
+# trick as the counters above, just for a batch of ~554 rows instead of
+# a couple of counters.
+_SCREENER_PARTITION = "__SCREENER__"
 
 _dynamo_lock = threading.Lock()
 _table = None
@@ -362,3 +367,90 @@ def get_usage_stats() -> dict:
     except Exception as e:
         print(f"  [storage] DynamoDB query failed ({e})")
         return {"total_analyses": 0, "most_popular": []}
+
+
+# In-memory fallback for the screener snapshot, mirrors the same
+# graceful-degradation pattern as the rest of this file.
+_screener_memory_fallback: dict = {}
+
+
+def save_screener_row(date_str: str, ticker: str, row: dict):
+    """
+    Save one ticker's screener metrics for a given date. Uses the
+    reserved __SCREENER__ partition with a "date#ticker" sort key, so
+    reading back a whole day's snapshot is one efficient Query (see
+    get_screener_snapshot), not a Scan across the entire table.
+    """
+    table = _get_table()
+    window_sig = f"{date_str}#{ticker}"
+    # row's own "ticker" field (e.g. "NVDA") would silently overwrite the
+    # DynamoDB partition key attribute — which is also named "ticker" but
+    # always holds "__SCREENER__" for these rows — if unpacked directly.
+    # Stored under "stock_ticker" instead, reconstructed on read.
+    row_without_collision = {k: v for k, v in row.items() if k != "ticker"}
+
+    if table is None:
+        with _dynamo_lock:
+            _screener_memory_fallback[(date_str, ticker)] = row
+        return
+
+    try:
+        item = {
+            "ticker": _SCREENER_PARTITION,
+            "window_sig": window_sig,
+            "stock_ticker": ticker,
+            **row_without_collision,
+        }
+        # DynamoDB rejects native Python floats for Number attributes —
+        # store numeric fields as strings, same convention as
+        # baseline_price elsewhere in this file, parsed back on read.
+        for key, value in item.items():
+            if isinstance(value, float):
+                item[key] = str(value)
+        table.put_item(Item=item)
+    except Exception as e:
+        print(f"  [storage] Screener row write failed for {ticker} ({e})")
+        with _dynamo_lock:
+            _screener_memory_fallback[(date_str, ticker)] = row
+
+
+def get_screener_snapshot(date_str: str) -> list:
+    """
+    All screener rows for a given date, via a Query scoped to the
+    reserved partition (cheap, regardless of how large the main
+    analyses table grows) rather than a Scan.
+    """
+    table = _get_table()
+
+    if table is None:
+        with _dynamo_lock:
+            return [
+                row for (d, t), row in _screener_memory_fallback.items()
+                if d == date_str
+            ]
+
+    try:
+        from boto3.dynamodb.conditions import Key
+        response = table.query(
+            KeyConditionExpression=Key("ticker").eq(_SCREENER_PARTITION)
+                                   & Key("window_sig").begins_with(f"{date_str}#"),
+        )
+        rows = []
+        for item in response.get("Items", []):
+            row = {k: v for k, v in item.items() if k not in ("ticker", "window_sig")}
+            if "stock_ticker" in row:
+                row["ticker"] = row.pop("stock_ticker")
+            # Convert the string-encoded numeric fields back to floats.
+            for key, value in row.items():
+                if key in ("ticker", "company_name", "market", "sector", "currency"):
+                    continue  # these are genuinely strings, never numeric
+                if isinstance(value, str):
+                    try:
+                        row[key] = float(value)
+                    except ValueError:
+                        pass
+            rows.append(row)
+        return rows
+    except Exception as e:
+        print(f"  [storage] Screener snapshot query failed ({e})")
+        return []
