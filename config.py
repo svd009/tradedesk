@@ -89,6 +89,13 @@ SUBAGENT_BATCH_TIME_BUDGET_SECONDS = 45  # max wait for the 5 parallel subagents
 # burst of curiosity) while capping sustained hammering of the button.
 RATE_LIMIT_BUCKET_CAPACITY = 5
 RATE_LIMIT_REFILL_SECONDS_PER_TOKEN = 600
+
+# Concurrency cap: how many analyses can run AT THE SAME TIME, across
+# every user combined — a different concern from the rate limiter above
+# (that one paces one person's requests over time; this one bounds total
+# simultaneous load). Not required at current traffic, built primarily
+# as a system-design learning piece — see src/orchestrator/concurrency_limiter.py.
+CONCURRENCY_CAP = 10
 SEC_FILING_CHARS      = 8000   # max chars to extract from SEC filings
 
 # ── Portfolio defaults ────────────────────────────────────────────────────────
