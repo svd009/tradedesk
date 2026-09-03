@@ -721,26 +721,26 @@ def render_single_stock_result(result):
     # HTML div) — Streamlit widgets called inside a markdown-injected
     # div don't actually nest inside it in the DOM, so a genuine card
     # needs the native container, not a CSS hack around it.
+    #
+    # Everything lives in ONE row of columns rather than several
+    # stacked blocks — the earlier version put the badge in a columns
+    # row and then confidence/score in a separate full-width block
+    # below it, and each of those picks up Streamlit's own default
+    # spacing, which is what made the card feel oversized and empty.
     with st.container(border=True):
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
         with col1:
-            st.markdown(f"### {company} ({ticker})")
+            st.markdown(f"**{company} ({ticker})**")
             st.caption(result.get("sector", ""))
         with col2:
             st.markdown(
                 f'<div class="rec-badge {rec}">{rec.replace("_", " ")}</div>',
                 unsafe_allow_html=True
             )
-
-        st.markdown(
-            f'<div style="display:flex; gap:32px; margin:10px 0 0 0;">'
-            f'<div><span style="color:#6B7280; font-size:12px;">Confidence</span><br>'
-            f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{confidence:.0%}</span></div>'
-            f'<div><span style="color:#6B7280; font-size:12px;">Composite Score</span><br>'
-            f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{score}/10</span></div>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
+        with col3:
+            st.markdown(compact_metric("Confidence", f"{confidence:.0%}"), unsafe_allow_html=True)
+        with col4:
+            st.markdown(compact_metric("Composite Score", f"{score}/10"), unsafe_allow_html=True)
 
         if failed_count >= 3:
             st.caption(
@@ -828,7 +828,7 @@ def render_single_stock_result(result):
     with tab_research:
         conflicts = rec_data.get("key_conflicts", [])
         if conflicts:
-            with st.expander("⚖️ Signal Conflicts Resolved by Synthesis Agent"):
+            with st.expander("⚖️ Where the Signals Disagreed"):
                 for c in conflicts:
                     st.markdown(f"- {c}")
 
@@ -851,7 +851,7 @@ def render_single_stock_result(result):
     with tab_method:
         thinking = result["synthesis"].get("thinking", "")
         if thinking:
-            with st.expander(f"🧠 Extended Thinking Trace ({len(thinking):,} chars)"):
+            with st.expander(f"📝 Detailed Reasoning ({len(thinking):,} chars)"):
                 snippet = thinking[:2000]
                 for paragraph in snippet.split("\n\n"):
                     if paragraph.strip():
@@ -863,7 +863,7 @@ def render_single_stock_result(result):
         eval_result = evaluator.evaluate(
             result["synthesis"], result["subagent_findings"], verbose=False
         )
-        with st.expander(f"✅ Synthesis Quality Score: {eval_result['overall_score']}/10 "
+        with st.expander(f"✅ Analysis Reliability Score: {eval_result['overall_score']}/10 "
                          f"({'PASSED' if eval_result['passed'] else 'BELOW THRESHOLD'})"):
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -871,9 +871,9 @@ def render_single_stock_result(result):
             with col2:
                 st.markdown(compact_metric("Consistency", f"{eval_result['consistency_score']}/10"), unsafe_allow_html=True)
             with col3:
-                st.markdown(compact_metric("Conflict Resolution", f"{eval_result['conflict_score']}/10"), unsafe_allow_html=True)
+                st.markdown(compact_metric("Signal Alignment", f"{eval_result['conflict_score']}/10"), unsafe_allow_html=True)
             with col4:
-                st.markdown(compact_metric("Structure", f"{eval_result['structure_score']}/10"), unsafe_allow_html=True)
+                st.markdown(compact_metric("Clarity", f"{eval_result['structure_score']}/10"), unsafe_allow_html=True)
 
         report_json = json.dumps(result["report"], indent=2, default=str)
         st.download_button(
@@ -1280,19 +1280,23 @@ elif st.session_state.last_result is not None:
     else:
         render_portfolio_result(st.session_state.last_result)
 else:
-    st.markdown("## 5 specialists. Zero forced agreement.")
-    st.markdown(
-        "Type a ticker and watch five research agents actually disagree, "
-        "news, fundamentals, technicals, macro, and risk, then see exactly "
-        "how the conflict gets resolved into one final call. No black box, "
-        "no single confident guess pretending there was nothing to argue about."
-    )
-    st.caption("Enter a ticker in the sidebar and click **Run Analysis** to get started.")
+    with st.container(border=True):
+        st.markdown("## Every angle. One clear call.")
+        st.markdown(
+            "Get a complete picture before you decide — fundamentals, technicals, "
+            "news, macro trends, and risk, all weighed together into a single "
+            "BUY, HOLD, or SELL you can actually act on."
+        )
+        st.caption("Enter a ticker in the sidebar and click **Run Analysis** to get started.")
+
     # NOTE (not shown in UI): synthesis runs on Claude Sonnet with extended
     # thinking, subagents on Claude Haiku, served via AWS Bedrock. Data
     # sources: Yahoo Finance (price/fundamentals), SEC EDGAR (US filings),
     # Tavily (live news search). See config.py and the study guide for detail.
     col1, col2, col3 = st.columns(3)
-    col1.metric("Subagents", "5", "running in parallel")
-    col2.metric("Markets", "US + India", "NSE / BSE supported")
-    col3.metric("Cost to try", "Free", "no signup required")
+    with col1:
+        st.markdown(compact_metric("Coverage", "5 factors", "fundamentals to risk"), unsafe_allow_html=True)
+    with col2:
+        st.markdown(compact_metric("Markets", "US + India", "NSE / BSE supported"), unsafe_allow_html=True)
+    with col3:
+        st.markdown(compact_metric("Cost to try", "Free", "no signup required"), unsafe_allow_html=True)
