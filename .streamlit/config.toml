@@ -10,3 +10,17 @@
 # unaffected by this setting and continue to work normally.
 [client]
 toolbarMode = "viewer"
+
+[theme]
+# A warm, quiet palette instead of Streamlit's stark default white —
+# built around the same green/red/amber signal colors already used in
+# the candlestick chart and recommendation badges, just applied
+# consistently across the whole app now instead of only in isolated
+# spots. See app.py's injected CSS for the refined typography
+# (a proper sans-serif for prose, monospace for numbers) that pairs
+# with this base.
+primaryColor = "#0F5C5C"
+backgroundColor = "#FAF9F6"
+secondaryBackgroundColor = "#EFEDE8"
+textColor = "#1F2937"
+font = "sans serif"
