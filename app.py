@@ -51,39 +51,91 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* Numbers get a monospace face — the same reason a real trading
+   terminal does this: digits align cleanly in a metrics grid, which
+   reads as considered rather than default. Targets Streamlit's stable
+   data-testid rather than internal class names, which change between
+   versions. */
+[data-testid="stMetricValue"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+}
+[data-testid="stMetricLabel"] {
+    font-family: 'Inter', sans-serif;
+    font-weight: 500;
+    color: #6B7280;
+}
+
+/* A quiet masthead instead of a plain st.title() */
+.td-masthead {
+    padding: 4px 0 16px 0;
+    border-bottom: 2px solid #0F5C5C;
+    margin-bottom: 12px;
+}
+.td-masthead h1 {
+    font-family: 'Inter', sans-serif;
+    font-weight: 700;
+    font-size: 26px;
+    color: #1F2937;
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+.td-masthead p {
+    font-family: 'Inter', sans-serif;
+    color: #6B7280;
+    font-size: 13px;
+    margin: 3px 0 0 0;
+}
+
+/* Recommendation badge — muted, confident colors instead of loud
+   saturated ones, echoing the candlestick chart's own bull/bear
+   colors rather than introducing new ones. */
 .rec-badge {
     display: inline-block;
-    padding: 8px 20px;
-    border-radius: 8px;
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
+    padding: 10px 22px;
+    border-radius: 6px;
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    font-family: 'Inter', sans-serif;
 }
-.STRONG_BUY  { background: #1a7340; color: white; }
-.BUY         { background: #2d9e5f; color: white; }
-.HOLD        { background: #a67c00; color: white; }
-.SELL        { background: #c0392b; color: white; }
-.STRONG_SELL { background: #7b241c; color: white; }
+.STRONG_BUY  { background: #15803D; color: #FAFAF9; }
+.BUY         { background: #16A34A; color: #FAFAF9; }
+.HOLD        { background: #B45309; color: #FAFAF9; }
+.SELL        { background: #DC2626; color: #FAFAF9; }
+.STRONG_SELL { background: #991B1B; color: #FAFAF9; }
+
 .signal-pill {
     display: inline-block;
-    padding: 3px 12px;
-    border-radius: 20px;
-    font-size: 13px;
+    padding: 4px 13px;
+    border-radius: 4px;
+    font-size: 12px;
     font-weight: 600;
     margin: 2px;
+    font-family: 'Inter', sans-serif;
+    letter-spacing: 0.01em;
 }
-.bullish  { background: #d5f5e3; color: #1a7340; }
-.bearish  { background: #fadbd8; color: #922b21; }
-.neutral  { background: #fdebd0; color: #935116; }
-.na       { background: #f0f0f0; color: #666; }
+.bullish  { background: #DCFCE7; color: #15803D; }
+.bearish  { background: #FEE2E2; color: #991B1B; }
+.neutral  { background: #FEF3C7; color: #92400E; }
+.na       { background: #F3F4F6; color: #6B7280; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.title("📈 TradeDesk")
-    st.caption("Multi-Subagent Equity Research System")
+    st.markdown(
+        '<div class="td-masthead"><h1>📈 TradeDesk</h1>'
+        '<p>Multi-Subagent Equity Research</p></div>',
+        unsafe_allow_html=True,
+    )
     st.divider()
 
     mode = st.radio("Analysis Mode", ["Single Stock", "Portfolio", "🔎 Screener", "📊 Track Record"], index=0)
@@ -149,8 +201,8 @@ with st.sidebar:
                 force_refresh = st.checkbox(
                     "Force fresh analysis",
                     value=False,
-                    help="Analyses are cached once per day (resets 6 AM ET) for speed. "
-                         "Check this to run a brand-new analysis right now instead."
+                    help="Check this to run a brand-new analysis right now, "
+                         "instead of using a recent result."
                 )
             else:
                 st.subheader("Portfolio Holdings")
@@ -824,8 +876,11 @@ def render_portfolio_result(result):
 # NOTE: caption used to end with "· Powered by Claude API" — removed from
 # the visible UI per request; the model provider is still fully documented
 # in config.py and the study guide, just not surfaced to end users.
-st.title("📈 TradeDesk")
-st.caption("Multi-Subagent Equity Research & Portfolio Intelligence")
+st.markdown(
+    '<div class="td-masthead"><h1>📈 TradeDesk</h1>'
+    '<p>Multi-Subagent Equity Research &amp; Portfolio Intelligence</p></div>',
+    unsafe_allow_html=True,
+)
 
 # st.button() only returns True for the single rerun triggered by the click
 # itself — any later rerun (e.g. toggling the chart's Line/Candlestick radio)
@@ -1006,10 +1061,7 @@ if mode == "🔎 Screener":
 
     def _screener_progress(done, total):
         progress_bar.progress(done / total)
-        progress_caption.caption(
-            f"Building today's screener snapshot for the first time today "
-            f"({done}/{total} tickers checked)... this only happens once per day."
-        )
+        progress_caption.caption(f"Loading stock data... ({done}/{total})")
 
     with st.spinner("Loading screener..."):
         snapshot = screener.get_or_build_snapshot(progress_callback=_screener_progress)
@@ -1017,10 +1069,8 @@ if mode == "🔎 Screener":
     progress_bar.empty()
 
     if not snapshot:
-        st.error("Couldn't build today's screener snapshot right now — try again shortly.")
+        st.error("Couldn't load the screener right now — try again shortly.")
     else:
-        st.caption(f"Filtering across {len(snapshot)} stocks. Snapshot refreshes daily at 6 AM ET.")
-
         col1, col2 = st.columns(2)
         with col1:
             market_filter = st.selectbox("Market", ["All", "US", "India"], key="screener_market")
@@ -1081,10 +1131,10 @@ if mode == "🔎 Screener":
             st.caption("No stocks match these filters — try loosening them.")
 
         st.divider()
-        if st.button("🔄 Force rebuild today's snapshot"):
-            with st.spinner("Rebuilding (this fetches fresh data for every ticker again)..."):
+        if st.button("🔄 Refresh data"):
+            with st.spinner("Refreshing..."):
                 screener.get_or_build_snapshot(force_refresh=True, progress_callback=_screener_progress)
-            st.success("Rebuilt — refresh the page to see updated results.")
+            st.success("Refreshed — reload the page to see updated results.")
 
 # ── Track Record: usage + accuracy, rendered immediately when selected ──────
 if mode == "📊 Track Record":
@@ -1098,9 +1148,7 @@ if mode == "📊 Track Record":
     )
 
     usage = analysis_cache.cache_stats()
-    col1, col2 = st.columns(2)
-    col1.metric("Total analyses run", usage["total_analyses"])
-    col2.metric("Current cache window", usage["current_window"])
+    st.metric("Total analyses run", usage["total_analyses"])
 
     if usage["most_popular"]:
         st.markdown("**Most-analyzed tickers**")
