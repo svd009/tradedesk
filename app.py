@@ -714,91 +714,39 @@ def render_single_stock_result(result):
         "financial adviser before making any investment decision."
     )
 
-    # ── Header ────────────────────────────────────────────────────
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.markdown(f"### {company} ({ticker})")
-        st.caption(result.get("sector", ""))
-
     failed_count, total_subagents = _count_failed_subagents(result["subagent_findings"])
 
-    # The recommendation always renders normally — confidence and
-    # composite score already reflect any missing data (the synthesis
-    # agent accounts for gaps itself), so there's no need to replace
-    # the whole result with a special "refusal" state. A low-data
-    # analysis just gets one small, quiet note below, not a takeover.
-    with col2:
-        st.markdown(
-            f'<div class="rec-badge {rec}">{rec.replace("_", " ")}</div>',
-            unsafe_allow_html=True
-        )
-
-    if failed_count >= 3:
-        st.caption(
-            f"⚠️ {failed_count} of {total_subagents} research subagents didn't return "
-            "data for this one — see Subagent Research Detail below for specifics."
-        )
-
-    st.divider()
-
-    # ── Price chart + signal summary ──────────────────────────────
-    col_chart, col_signals = st.columns([4, 1])
-    with col_chart:
-        st.subheader("Price History")
-        chart_controls = st.columns([1, 2])
-        with chart_controls[0]:
-            chart_type = st.radio(
-                "View", ["Line", "Candlestick"], horizontal=True,
-                key=f"chart_type_{ticker}", label_visibility="collapsed",
-            )
-        with chart_controls[1]:
-            overlays = st.multiselect(
-                "Indicators", ["SMA 20", "SMA 50", "SMA 200", "Bollinger Bands", "Support/Resistance"],
-                default=[], key=f"overlays_{ticker}",
-                label_visibility="collapsed", placeholder="Add indicators…",
-            )
-        show_volume = st.checkbox("Show volume", value=True, key=f"vol_{ticker}")
-        fig = price_chart(ticker, chart_type=chart_type, overlays=overlays, show_volume=show_volume)
-        if fig:
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.caption("Price chart unavailable")
-
-    with col_signals:
-        st.caption("Signal Summary")
-        ss = rec_data.get("signal_summary", {})
-        signals = [
-            ("News",       ss.get("news_sentiment")),
-            ("Fundamental", ss.get("fundamental_health")),
-            ("Technical",  ss.get("technical_signal")),
-            ("Macro",      ss.get("macro_environment")),
-            ("Portfolio",  ss.get("portfolio_fit")),
-        ]
-        for label, val in signals:
+    # ── Hero card ─────────────────────────────────────────────────
+    # A real bordered container (st.container(border=True), not a raw
+    # HTML div) — Streamlit widgets called inside a markdown-injected
+    # div don't actually nest inside it in the DOM, so a genuine card
+    # needs the native container, not a CSS hack around it.
+    with st.container(border=True):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.markdown(f"### {company} ({ticker})")
+            st.caption(result.get("sector", ""))
+        with col2:
             st.markdown(
-                f'<div style="font-size:12px; margin-bottom:6px;">'
-                f'<span style="color:#6B7280;">{label}</span><br>{signal_pill(label, val)}</div>',
-                unsafe_allow_html=True,
+                f'<div class="rec-badge {rec}">{rec.replace("_", " ")}</div>',
+                unsafe_allow_html=True
             )
 
-    # Confidence + Composite Score — small, side by side, placed here
-    # (after the chart and price) rather than competing for attention
-    # at the very top of the page.
-    st.markdown(
-        f'<div style="display:flex; gap:32px; margin:12px 0;">'
-        f'<div><span style="color:#6B7280; font-size:12px;">Confidence</span><br>'
-        f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{confidence:.0%}</span></div>'
-        f'<div><span style="color:#6B7280; font-size:12px;">Composite Score</span><br>'
-        f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{score}/10</span></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f'<div style="display:flex; gap:32px; margin:10px 0 0 0;">'
+            f'<div><span style="color:#6B7280; font-size:12px;">Confidence</span><br>'
+            f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{confidence:.0%}</span></div>'
+            f'<div><span style="color:#6B7280; font-size:12px;">Composite Score</span><br>'
+            f'<span style="font-family:\'IBM Plex Mono\',monospace; font-weight:600; font-size:17px;">{score}/10</span></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
-    st.divider()
-
-    # ── Executive summary + bull/bear ─────────────────────────────
-    st.subheader("Executive Summary")
-    st.info(rec_data.get("executive_summary", ""))
+        if failed_count >= 3:
+            st.caption(
+                f"⚠️ {failed_count} of {total_subagents} research subagents didn't return "
+                "data for this one — see Deep Research below for specifics."
+            )
 
     def render_case(items):
         """
@@ -810,36 +758,84 @@ def render_single_stock_result(result):
             return items  # old format — show as-is rather than breaking
         return "\n".join(f"- {point}" for point in items) if items else ""
 
-    col_bull, col_bear = st.columns(2)
-    with col_bull:
-        st.success(f"**Bull Case**\n\n{render_case(rec_data.get('bull_case', []))}")
-    with col_bear:
-        st.error(f"**Bear Case**\n\n{render_case(rec_data.get('bear_case', []))}")
+    tab_overview, tab_chart, tab_research, tab_method = st.tabs(
+        ["📋 Overview", "📈 Chart & Signals", "🔬 Deep Research", "🧪 Methodology"]
+    )
 
-    # ── Risks + catalysts ─────────────────────────────────────────
-    col_risk, col_cat = st.columns(2)
-    with col_risk:
-        st.subheader("Key Risks")
-        for r in rec_data.get("key_risks", []):
-            st.markdown(f"- {r}")
-    with col_cat:
-        st.subheader("Catalysts to Watch")
-        for c in rec_data.get("catalysts_to_watch", []):
-            st.markdown(f"- {c}")
+    # ── Overview: the actual verdict and reasoning — what most people
+    # want first, now its own tab instead of buried after the chart. ──
+    with tab_overview:
+        st.subheader("Executive Summary")
+        st.info(rec_data.get("executive_summary", ""))
 
-    # ── Conflict resolution ───────────────────────────────────────
-    conflicts = rec_data.get("key_conflicts", [])
-    if conflicts:
-        with st.expander("⚖️ Signal Conflicts Resolved by Synthesis Agent"):
-            for c in conflicts:
+        col_bull, col_bear = st.columns(2)
+        with col_bull:
+            st.success(f"**Bull Case**\n\n{render_case(rec_data.get('bull_case', []))}")
+        with col_bear:
+            st.error(f"**Bear Case**\n\n{render_case(rec_data.get('bear_case', []))}")
+
+        col_risk, col_cat = st.columns(2)
+        with col_risk:
+            st.subheader("Key Risks")
+            for r in rec_data.get("key_risks", []):
+                st.markdown(f"- {r}")
+        with col_cat:
+            st.subheader("Catalysts to Watch")
+            for c in rec_data.get("catalysts_to_watch", []):
                 st.markdown(f"- {c}")
 
-    # ── Subagent detail ───────────────────────────────────────────
-    with st.expander("🔬 Subagent Research Detail"):
+    # ── Chart & Signals ──────────────────────────────────────────────
+    with tab_chart:
+        col_chart, col_signals = st.columns([4, 1])
+        with col_chart:
+            chart_controls = st.columns([1, 2])
+            with chart_controls[0]:
+                chart_type = st.radio(
+                    "View", ["Line", "Candlestick"], horizontal=True,
+                    key=f"chart_type_{ticker}", label_visibility="collapsed",
+                )
+            with chart_controls[1]:
+                overlays = st.multiselect(
+                    "Indicators", ["SMA 20", "SMA 50", "SMA 200", "Bollinger Bands", "Support/Resistance"],
+                    default=[], key=f"overlays_{ticker}",
+                    label_visibility="collapsed", placeholder="Add indicators…",
+                )
+            show_volume = st.checkbox("Show volume", value=True, key=f"vol_{ticker}")
+            fig = price_chart(ticker, chart_type=chart_type, overlays=overlays, show_volume=show_volume)
+            if fig:
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("Price chart unavailable")
+
+        with col_signals:
+            st.caption("Signal Summary")
+            ss = rec_data.get("signal_summary", {})
+            signals = [
+                ("News",       ss.get("news_sentiment")),
+                ("Fundamental", ss.get("fundamental_health")),
+                ("Technical",  ss.get("technical_signal")),
+                ("Macro",      ss.get("macro_environment")),
+                ("Portfolio",  ss.get("portfolio_fit")),
+            ]
+            for label, val in signals:
+                st.markdown(
+                    f'<div style="font-size:12px; margin-bottom:6px;">'
+                    f'<span style="color:#6B7280;">{label}</span><br>{signal_pill(label, val)}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ── Deep Research: the raw material behind the verdict ──────────
+    with tab_research:
+        conflicts = rec_data.get("key_conflicts", [])
+        if conflicts:
+            with st.expander("⚖️ Signal Conflicts Resolved by Synthesis Agent"):
+                for c in conflicts:
+                    st.markdown(f"- {c}")
+
         findings = result["subagent_findings"]
-        tabs = st.tabs(["📰 News", "📊 Fundamentals", "📈 Technical", "🌍 Macro", "⚖️ Risk"])
+        subagent_tabs = st.tabs(["📰 News", "📊 Fundamentals", "📈 Technical", "🌍 Macro", "⚖️ Risk"])
         agent_keys = ["news", "fundamentals", "technical", "macro", "risk"]
-        for tab, key in zip(tabs, agent_keys):
+        for tab, key in zip(subagent_tabs, agent_keys):
             with tab:
                 data = findings.get(key, {})
                 if data:
@@ -850,46 +846,46 @@ def render_single_stock_result(result):
                     st.divider()
                     render_quarterly_and_fundamentals(ticker, currency=curr)
 
-    # ── Extended thinking ─────────────────────────────────────────
-    thinking = result["synthesis"].get("thinking", "")
-    if thinking:
-        with st.expander(f"🧠 Extended Thinking Trace ({len(thinking):,} chars)"):
-            snippet = thinking[:2000]
-            for paragraph in snippet.split("\n\n"):
-                if paragraph.strip():
-                    st.write(paragraph.strip())
-            if len(thinking) > 2000:
-                st.caption("… truncated, download the full report for the complete trace")
+    # ── Methodology: how the answer was produced, for anyone who wants
+    # to verify or audit it, not something everyone needs to see first ──
+    with tab_method:
+        thinking = result["synthesis"].get("thinking", "")
+        if thinking:
+            with st.expander(f"🧠 Extended Thinking Trace ({len(thinking):,} chars)"):
+                snippet = thinking[:2000]
+                for paragraph in snippet.split("\n\n"):
+                    if paragraph.strip():
+                        st.write(paragraph.strip())
+                if len(thinking) > 2000:
+                    st.caption("… truncated, download the full report for the complete trace")
 
-    # ── Evaluation ────────────────────────────────────────────────
-    evaluator = TradeDeskevaluator()
-    eval_result = evaluator.evaluate(
-        result["synthesis"], result["subagent_findings"], verbose=False
-    )
-    with st.expander(f"✅ Synthesis Quality Score: {eval_result['overall_score']}/10 "
-                     f"({'PASSED' if eval_result['passed'] else 'BELOW THRESHOLD'})"):
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.markdown(compact_metric("Completeness", f"{eval_result['completeness_score']}/10"), unsafe_allow_html=True)
-        with col2:
-            st.markdown(compact_metric("Consistency", f"{eval_result['consistency_score']}/10"), unsafe_allow_html=True)
-        with col3:
-            st.markdown(compact_metric("Conflict Resolution", f"{eval_result['conflict_score']}/10"), unsafe_allow_html=True)
-        with col4:
-            st.markdown(compact_metric("Structure", f"{eval_result['structure_score']}/10"), unsafe_allow_html=True)
+        evaluator = TradeDeskevaluator()
+        eval_result = evaluator.evaluate(
+            result["synthesis"], result["subagent_findings"], verbose=False
+        )
+        with st.expander(f"✅ Synthesis Quality Score: {eval_result['overall_score']}/10 "
+                         f"({'PASSED' if eval_result['passed'] else 'BELOW THRESHOLD'})"):
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.markdown(compact_metric("Completeness", f"{eval_result['completeness_score']}/10"), unsafe_allow_html=True)
+            with col2:
+                st.markdown(compact_metric("Consistency", f"{eval_result['consistency_score']}/10"), unsafe_allow_html=True)
+            with col3:
+                st.markdown(compact_metric("Conflict Resolution", f"{eval_result['conflict_score']}/10"), unsafe_allow_html=True)
+            with col4:
+                st.markdown(compact_metric("Structure", f"{eval_result['structure_score']}/10"), unsafe_allow_html=True)
 
-    # ── Download report ───────────────────────────────────────────
-    report_json = json.dumps(result["report"], indent=2, default=str)
-    st.download_button(
-        "⬇️ Download Full Report (JSON)",
-        data=report_json,
-        file_name=f"tradedesk_{ticker}_{result['report']['report_id']}.json",
-        mime="application/json",
-    )
-    elapsed = result["subagent_findings"].get("elapsed_seconds", 0)
-    st.caption(f"Analysis completed in {elapsed}s · "
-               f"5 subagents ran in parallel · "
-               f"Synthesis used extended thinking")
+        report_json = json.dumps(result["report"], indent=2, default=str)
+        st.download_button(
+            "⬇️ Download Full Report (JSON)",
+            data=report_json,
+            file_name=f"tradedesk_{ticker}_{result['report']['report_id']}.json",
+            mime="application/json",
+        )
+        elapsed = result["subagent_findings"].get("elapsed_seconds", 0)
+        st.caption(f"Analysis completed in {elapsed}s · "
+                   f"5 subagents ran in parallel · "
+                   f"Synthesis used extended thinking")
 
 
 def render_portfolio_result(result):
