@@ -641,11 +641,21 @@ def _count_failed_subagents(subagent_findings: dict) -> tuple:
     legitimately empty (no portfolio provided in single-stock mode,
     which is expected behavior, not a breakdown) — it only counts if
     it has an actual error/_timed_out flag like any other agent.
+
+    Defensive against a finding not being a dict at all — this happened
+    for real: a subagent occasionally returned valid-but-wrong-shaped
+    JSON (e.g. a bare list), which crashed this function with an
+    AttributeError before the root cause was fixed upstream. A
+    non-dict finding is itself a failure, not something to crash on,
+    and this also protects against any result cached before that fix.
     """
-    failed = sum(
-        1 for finding in subagent_findings.values()
-        if finding.get("error") or finding.get("_timed_out")
-    )
+    failed = 0
+    for finding in subagent_findings.values():
+        if not isinstance(finding, dict):
+            failed += 1
+            continue
+        if finding.get("error") or finding.get("_timed_out"):
+            failed += 1
     return failed, len(subagent_findings)
 
 
