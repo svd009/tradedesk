@@ -634,29 +634,34 @@ def render_quarterly_and_fundamentals(ticker: str, currency: str = "$"):
             st.caption(fund["business_summary"])
 
 
+_AGENT_KEYS = ["news", "fundamentals", "technical", "macro", "risk"]
+
+
 def _count_failed_subagents(subagent_findings: dict) -> tuple:
     """
-    How many of the subagents that actually ran either errored out or
-    hit the time budget. Risk isn't counted as a "failure" when it's
-    legitimately empty (no portfolio provided in single-stock mode,
-    which is expected behavior, not a breakdown) — it only counts if
-    it has an actual error/_timed_out flag like any other agent.
+    How many of the 5 real subagents either errored out or hit the time
+    budget. Risk isn't counted as a "failure" when it's legitimately
+    empty (no portfolio provided in single-stock mode, which is
+    expected behavior, not a breakdown) — it only counts if it has an
+    actual error/_timed_out flag like any other agent.
 
-    Defensive against a finding not being a dict at all — this happened
-    for real: a subagent occasionally returned valid-but-wrong-shaped
-    JSON (e.g. a bare list), which crashed this function with an
-    AttributeError before the root cause was fixed upstream. A
-    non-dict finding is itself a failure, not something to crash on,
-    and this also protects against any result cached before that fix.
+    Only checks the 5 known agent keys — subagent_findings is the RAW
+    dict from the parallel runner, which also carries non-agent
+    metadata (elapsed_seconds, errors, agent_timings). A real bug: an
+    earlier version iterated over every key in the dict, which counted
+    a plain float and a list as "failed subagents" alongside real ones,
+    inflating the count (e.g. showing "3/9" instead of the true count
+    out of 5).
     """
     failed = 0
-    for finding in subagent_findings.values():
+    for key in _AGENT_KEYS:
+        finding = subagent_findings.get(key)
         if not isinstance(finding, dict):
             failed += 1
             continue
         if finding.get("error") or finding.get("_timed_out"):
             failed += 1
-    return failed, len(subagent_findings)
+    return failed, len(_AGENT_KEYS)
 
 
 def render_single_stock_result(result):
@@ -681,38 +686,26 @@ def render_single_stock_result(result):
         st.caption(result.get("sector", ""))
 
     failed_count, total_subagents = _count_failed_subagents(result["subagent_findings"])
-    not_enough_data = failed_count >= 3  # majority of the 5 subagents came back empty
 
-    if not_enough_data:
-        # TickerWorth-style refusal: rather than show a HOLD/low-confidence
-        # badge that still LOOKS like a real answer, say plainly that
-        # there isn't enough real signal to stand behind one. The
-        # underlying result still exists (whatever partial data came
-        # back is visible in Subagent Research Detail below), this only
-        # changes what's shown as the headline verdict.
-        with col2:
-            st.markdown(
-                '<div class="rec-badge" style="background:#6b7280;">NOT ENOUGH DATA</div>',
-                unsafe_allow_html=True
-            )
-        with col3:
-            st.metric("Subagents failed", f"{failed_count}/{total_subagents}")
-        st.error(
-            f"⚠️ **{failed_count} of {total_subagents} research subagents couldn't return data** "
-            "for this ticker (a data source outage, an invalid/delisted ticker, or a timeout). "
-            "Rather than show a recommendation that looks confident but isn't backed by real "
-            "research, we're saying so plainly. Check the Subagent Research Detail below to "
-            "see exactly what did and didn't come back, or try again shortly."
+    # The recommendation always renders normally — confidence and
+    # composite score already reflect any missing data (the synthesis
+    # agent accounts for gaps itself), so there's no need to replace
+    # the whole result with a special "refusal" state. A low-data
+    # analysis just gets one small, quiet note below, not a takeover.
+    with col2:
+        st.markdown(
+            f'<div class="rec-badge {rec}">{rec.replace("_", " ")}</div>',
+            unsafe_allow_html=True
         )
-    else:
-        with col2:
-            st.markdown(
-                f'<div class="rec-badge {rec}">{rec.replace("_", " ")}</div>',
-                unsafe_allow_html=True
-            )
-        with col3:
-            st.metric("Confidence", f"{confidence:.0%}")
-            st.metric("Composite Score", f"{score}/10")
+    with col3:
+        st.metric("Confidence", f"{confidence:.0%}")
+        st.metric("Composite Score", f"{score}/10")
+
+    if failed_count >= 3:
+        st.caption(
+            f"⚠️ {failed_count} of {total_subagents} research subagents didn't return "
+            "data for this one — see Subagent Research Detail below for specifics."
+        )
 
     st.divider()
 
