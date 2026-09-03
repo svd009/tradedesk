@@ -164,6 +164,15 @@ class BaseAgent:
             if match:
                 text = match.group(1)
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict):
+                # Syntactically valid JSON, but not the object shape every
+                # downstream consumer assumes (a list, a bare string, a
+                # number). This was a real bug: it flowed through
+                # unprotected and crashed code that assumed every finding
+                # was always a dict.
+                return {"raw_output": raw, "parse_error": True,
+                        "error": f"Model returned valid JSON but not an object (got {type(parsed).__name__})"}
+            return parsed
         except json.JSONDecodeError:
             return {"raw_output": raw, "parse_error": True}
