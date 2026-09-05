@@ -111,11 +111,23 @@ def build_screener_snapshot(progress_callback=None) -> list:
     return rows
 
 
-def get_or_build_snapshot(force_refresh: bool = False, progress_callback=None) -> list:
+def get_or_build_snapshot(force_refresh: bool = False, progress_callback=None,
+                          allow_live_build: bool = False) -> list:
     """
-    Returns today's screener snapshot, building it (once) if it doesn't
-    exist yet, with stampede protection so simultaneous first-visitors
-    don't each trigger their own 554-ticker build.
+    Returns today's screener snapshot. Building it is now a HARD
+    lockdown, not a soft default: allow_live_build defaults to False,
+    and when it's False, this function will NEVER trigger the actual
+    ~5,786-ticker build, regardless of force_refresh — it just returns
+    whatever snapshot already exists (or an empty list if none does).
+
+    Why this changed: a live page load triggering that build hammers
+    Yahoo Finance with thousands of requests in one go, and that's
+    exactly what caused a real rate-limiting incident (it also broke
+    ordinary single-stock lookups like TSLA/NVDA, since they share the
+    same now-blocked connection). Only scripts/build_screener_snapshot.py
+    (run on a schedule via GitHub Actions, see
+    .github/workflows/screener-snapshot.yml) passes
+    allow_live_build=True. The live app should never need to.
     """
     date_str = _current_window()
 
@@ -123,6 +135,10 @@ def get_or_build_snapshot(force_refresh: bool = False, progress_callback=None) -
         existing = storage.get_screener_snapshot(date_str)
         if existing:
             return existing
+
+    if not allow_live_build:
+        existing = storage.get_screener_snapshot(date_str)
+        return existing if existing else []
 
     with _build_lock:
         # Double-checked: another thread may have just finished building
