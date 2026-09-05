@@ -203,3 +203,73 @@ def compute_scorecard(fundamentals: dict, price_data: dict) -> dict:
         "growth":        {"score": growth_score, "label": growth_label},
         "profitability": {"score": profitability_score, "label": profitability_label},
     }
+
+
+def compute_reverse_fair_value(fundamentals: dict) -> dict:
+    """
+    TickerWorth's reverse-DCF idea, adapted to what TradeDesk can
+    actually compute: instead of asking "is this stock cheap," ask
+    "what growth rate does the CURRENT PRICE already assume, and is
+    the company actually delivering that?"
+
+    The math: PEG = P/E ÷ growth%. A PEG of 1.0 is the commonly-cited
+    "fairly valued" threshold, so solving for growth% at PEG=1 gives
+    growth% = P/E. That's the growth rate already priced in. Compare
+    it to the company's actual blended growth (same weighting as
+    _score_growth: earnings growth weighted higher than revenue
+    growth) to see the gap.
+
+    A large positive gap (implied >> actual) means the price assumes
+    more growth than the business is currently proving — the market
+    is betting on an acceleration that hasn't shown up in the numbers
+    yet. A negative gap means the reverse: the business is growing
+    faster than the current price gives it credit for.
+    """
+    pe = fundamentals.get("pe_ratio")
+    if not isinstance(pe, (int, float)) or pe <= 0:
+        return {"implied_growth_pct": None, "actual_growth_pct": None,
+                "gap_pct": None, "interpretation": "Not enough data (no valid P/E)"}
+
+    implied_growth_pct = pe  # PEG=1 → growth% = P/E
+
+    revenue_growth = fundamentals.get("revenue_growth_yoy")
+    earnings_growth = fundamentals.get("earnings_growth_yoy")
+    values, weights = [], []
+    if isinstance(revenue_growth, (int, float)):
+        values.append(revenue_growth * 100)
+        weights.append(1)
+    if isinstance(earnings_growth, (int, float)):
+        values.append(earnings_growth * 100)
+        weights.append(2)
+
+    if not values:
+        return {"implied_growth_pct": round(implied_growth_pct, 1), "actual_growth_pct": None,
+                "gap_pct": None, "interpretation": "Not enough data (no growth figures)"}
+
+    actual_growth_pct = sum(v * w for v, w in zip(values, weights)) / sum(weights)
+    gap_pct = implied_growth_pct - actual_growth_pct
+
+    if gap_pct > 15:
+        interpretation = (
+            f"The price already assumes ~{implied_growth_pct:.0f}% growth, well above the "
+            f"~{actual_growth_pct:.0f}% the company is currently delivering — the market is "
+            f"betting on an acceleration that hasn't shown up in the numbers yet."
+        )
+    elif gap_pct < -15:
+        interpretation = (
+            f"The company is growing at ~{actual_growth_pct:.0f}%, well above the ~{implied_growth_pct:.0f}% "
+            f"the current price seems to assume — the price may not be giving the business "
+            f"full credit for its actual growth."
+        )
+    else:
+        interpretation = (
+            f"The price assumes ~{implied_growth_pct:.0f}% growth, roughly in line with the "
+            f"~{actual_growth_pct:.0f}% the company is actually delivering."
+        )
+
+    return {
+        "implied_growth_pct": round(implied_growth_pct, 1),
+        "actual_growth_pct": round(actual_growth_pct, 1),
+        "gap_pct": round(gap_pct, 1),
+        "interpretation": interpretation,
+    }
