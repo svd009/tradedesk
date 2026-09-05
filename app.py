@@ -1203,17 +1203,15 @@ if mode == "🔎 Screener":
     progress_caption = st.empty()
     progress_bar = st.empty()
 
-    def _screener_progress(done, total):
-        progress_bar.progress(done / total)
-        progress_caption.caption(f"Loading stock data... ({done}/{total})")
-
-    with st.spinner("Loading screener..."):
-        snapshot = screener.get_or_build_snapshot(progress_callback=_screener_progress)
+    snapshot = screener.get_or_build_snapshot()
     progress_caption.empty()
     progress_bar.empty()
 
     if not snapshot:
-        st.error("Couldn't load the screener right now — try again shortly.")
+        st.info(
+            "📅 Today's screener data isn't ready yet — it updates automatically every "
+            "morning. Check back shortly, or try again in a little while."
+        )
     else:
         # One-click presets — set the sliders below to a known
         # combination instead of dragging each one manually. Clicking
@@ -1315,10 +1313,12 @@ if mode == "🔎 Screener":
             st.caption("No stocks match these filters — try loosening them.")
 
         st.divider()
-        if st.button("🔄 Refresh data"):
-            with st.spinner("Refreshing..."):
-                screener.get_or_build_snapshot(force_refresh=True, progress_callback=_screener_progress)
-            st.success("Refreshed — reload the page to see updated results.")
+        st.caption(
+            "This data refreshes automatically every morning. Manual refresh has been "
+            "turned off here on purpose, rebuilding this list makes thousands of requests "
+            "to the market data source, which is only safe to do on a schedule, not from "
+            "someone's browser."
+        )
 
 # ── Track Record: usage + accuracy, rendered immediately when selected ──────
 if mode == "📊 Track Record":
