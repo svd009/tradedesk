@@ -77,6 +77,7 @@ def _fetch_one_row(company_name: str, ticker: str) -> dict:
             "peg_ratio": fund.get("peg_ratio"),
             "revenue_growth_yoy": fund.get("revenue_growth_yoy"),
             "profit_margin": fund.get("profit_margin"),
+            "dividend_yield": fund.get("dividend_yield"),
             "rsi": tech.get("rsi"),
             "price_change_pct": price_data.get("price_change_pct"),
             "current_price": price_data.get("current_price"),
@@ -146,7 +147,8 @@ def filter_snapshot(snapshot: list, market: str = None, sector: str = None,
                     pe_max: float = None, peg_max: float = None,
                     min_revenue_growth: float = None, min_profit_margin: float = None,
                     rsi_min: float = None, rsi_max: float = None,
-                    min_price_change: float = None, max_price_change: float = None) -> list:
+                    min_price_change: float = None, max_price_change: float = None,
+                    min_dividend_yield: float = None) -> list:
     """
     Pure Python filtering over an already-fetched snapshot — no network
     calls, instant regardless of how many filters are applied.
@@ -173,5 +175,29 @@ def filter_snapshot(snapshot: list, market: str = None, sector: str = None,
             continue
         if max_price_change is not None and (row.get("price_change_pct") is None or row["price_change_pct"] > max_price_change):
             continue
+        if min_dividend_yield is not None and (row.get("dividend_yield") is None or row["dividend_yield"] < min_dividend_yield):
+            continue
         results.append(row)
     return results
+
+
+# One-click filter presets — the actual slider VALUES to apply, keyed by
+# the same widget keys the Screener UI already uses, so applying a
+# preset is just "set these session_state values, then let the sliders
+# render normally from there." Values chosen as reasonable, commonly-
+# cited thresholds (RSI 30/70 for oversold/overbought is standard
+# technical-analysis convention), not tuned to any particular dataset.
+SCREENER_PRESETS = {
+    "🔻 Oversold Value": {
+        "screener_pe": 20, "screener_rsi": (0, 35),
+    },
+    "🚀 High Growth Momentum": {
+        "screener_growth": 20, "screener_pricechg": (15, 200),
+    },
+    "⚠️ Overbought": {
+        "screener_rsi": (70, 100),
+    },
+    "💰 Quality Dividend Payers": {
+        "screener_dividend": 2, "screener_pe": 300,
+    },
+}
