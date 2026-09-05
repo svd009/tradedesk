@@ -212,3 +212,65 @@ def compute_calibration_report(min_age_days: int = DEFAULT_MIN_AGE_DAYS) -> dict
         "buckets": buckets,
         "total_judged": sum(b["sample_size"] for b in buckets),
     }
+
+
+def compute_per_ticker_accuracy(price_lookup: dict, min_age_days: int = DEFAULT_MIN_AGE_DAYS) -> dict:
+    """
+    Per-ticker usage + accuracy, for showing directly in the Screener's
+    results table. Deliberately takes an already-fetched price_lookup
+    ({ticker: current_price}) rather than calling get_price_history
+    itself — the Screener's daily snapshot already has current prices
+    for every ticker it shows, so reusing them here avoids a second,
+    redundant network call per row purely to check accuracy.
+
+    Returns {ticker: {"times_analyzed": int, "accuracy_pct": float or
+    None, "judged_count": int}}. A ticker with no judged calls yet gets
+    accuracy_pct=None (not 0%) — there's nothing to be confident about
+    either way yet, and 0% would misleadingly read as "always wrong."
+    """
+    raw_items = storage.get_all_analyses()
+    now = datetime.now(_ET)
+    cutoff = now - timedelta(days=min_age_days)
+
+    per_ticker = {}
+    for item in raw_items:
+        ticker = item.get("ticker")
+        if not ticker:
+            continue
+        entry = per_ticker.setdefault(ticker, {"times_analyzed": 0, "correct": 0, "incorrect": 0})
+        entry["times_analyzed"] += 1
+
+        if not item.get("baseline_price"):
+            continue
+        try:
+            cached_at = datetime.fromisoformat(item["cached_at"])
+        except Exception:
+            continue
+        if cached_at > cutoff:
+            continue  # too recent to judge yet
+
+        current_price = price_lookup.get(ticker)
+        if current_price is None:
+            continue  # not in the current snapshot — skip rather than fetch
+
+        try:
+            baseline_price = float(item["baseline_price"])
+        except (TypeError, ValueError):
+            continue
+
+        pct_change = ((current_price - baseline_price) / baseline_price) * 100
+        verdict = _classify(item.get("recommendation", "UNKNOWN"), pct_change)
+        if verdict == "correct":
+            entry["correct"] += 1
+        elif verdict == "incorrect":
+            entry["incorrect"] += 1
+
+    result = {}
+    for ticker, entry in per_ticker.items():
+        judged = entry["correct"] + entry["incorrect"]
+        result[ticker] = {
+            "times_analyzed": entry["times_analyzed"],
+            "judged_count": judged,
+            "accuracy_pct": round(100 * entry["correct"] / judged, 1) if judged else None,
+        }
+    return result
