@@ -1,0 +1,38 @@
+name: Daily Screener Snapshot
+
+on:
+  schedule:
+    # 11:30 UTC, chosen to always land after the app's own 6 AM ET
+    # reset boundary regardless of daylight saving (6 AM EST = 11:00
+    # UTC, 6 AM EDT = 10:00 UTC — 11:30 UTC is safely after both).
+    # Finishes well before the ~9:30 AM ET US market open even in the
+    # worst case (a ~90 minute build).
+    - cron: "30 11 * * *"
+  workflow_dispatch: {}  # allows manually triggering a rebuild from the Actions tab
+
+jobs:
+  build-snapshot:
+    name: Pre-build tomorrow's Screener data
+    runs-on: ubuntu-latest
+    # This can genuinely take a while over ~5,786 tickers with a
+    # deliberately gentle thread pool — see screener.py's own docstring
+    # for why that pool is small on purpose. GitHub Actions' default
+    # job timeout (6 hours) is already comfortably more than enough;
+    # this caps it tighter so a truly stuck run doesn't run forever.
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build the Screener snapshot
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: python scripts/build_screener_snapshot.py
