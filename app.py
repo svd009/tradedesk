@@ -31,7 +31,7 @@ from src.orchestrator import accuracy_tracker
 from src.orchestrator.rate_limiter import get_user_bucket
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history, get_fundamentals
-from src.data.scorecard import compute_scorecard
+from src.data.scorecard import compute_scorecard, compute_reverse_fair_value
 from src.data.peer_comparison import build_peer_comparison
 from src.data.ticker_directory import COMPANY_TO_TICKER
 from src.data.technical_indicators import (
@@ -677,6 +677,20 @@ def render_quarterly_and_fundamentals(ticker: str, currency: str = "$"):
                    "only shown here for the two scores that actually depend on growth.")
     st.divider()
 
+    # ── Reverse fair-value: what growth does the CURRENT PRICE already
+    # assume, versus what the company is actually delivering.
+    rfv = compute_reverse_fair_value(fund)
+    if rfv["implied_growth_pct"] is not None:
+        st.markdown("**What Growth Is the Price Already Assuming?**")
+        if rfv["actual_growth_pct"] is not None:
+            col_implied, col_actual = st.columns(2)
+            with col_implied:
+                st.markdown(compact_metric("Price Implies", f"{rfv['implied_growth_pct']:.0f}% growth"), unsafe_allow_html=True)
+            with col_actual:
+                st.markdown(compact_metric("Actually Delivering", f"{rfv['actual_growth_pct']:.0f}% growth"), unsafe_allow_html=True)
+        st.caption(rfv["interpretation"])
+        st.divider()
+
     # ── Peer comparison: named, real competitors, not a sector average.
     # Only shown for tickers with a curated peer mapping — see
     # src/data/peer_comparison.py for why this is intentionally a small,
@@ -1201,6 +1215,28 @@ if mode == "🔎 Screener":
     if not snapshot:
         st.error("Couldn't load the screener right now — try again shortly.")
     else:
+        # One-click presets — set the sliders below to a known
+        # combination instead of dragging each one manually. Clicking
+        # a preset also resets any OTHER filter back to "no filter",
+        # so a previous preset's value doesn't linger and quietly
+        # narrow results in a way that isn't visible anymore.
+        _SCREENER_FILTER_DEFAULTS = {
+            "screener_pe": 300, "screener_growth": -30, "screener_rsi": (0, 100),
+            "screener_pricechg": (-80, 200), "screener_dividend": 0,
+        }
+
+        def _apply_screener_preset(preset_name):
+            preset = screener.SCREENER_PRESETS[preset_name]
+            for key, default in _SCREENER_FILTER_DEFAULTS.items():
+                st.session_state[key] = preset.get(key, default)
+
+        st.caption("Quick filters")
+        preset_cols = st.columns(len(screener.SCREENER_PRESETS))
+        for col, preset_name in zip(preset_cols, screener.SCREENER_PRESETS.keys()):
+            with col:
+                st.button(preset_name, on_click=_apply_screener_preset,
+                         args=(preset_name,), use_container_width=True)
+
         col1, col2 = st.columns(2)
         with col1:
             market_filter = st.selectbox("Market", ["All", "US", "India"], key="screener_market")
@@ -1220,6 +1256,8 @@ if mode == "🔎 Screener":
         with col6:
             price_change_range = st.slider("Price change % range", -80, 200, (-80, 200), key="screener_pricechg")
 
+        min_dividend_pct = st.slider("Min dividend yield (%)", 0, 10, 0, key="screener_dividend")
+
         filtered = screener.filter_snapshot(
             snapshot,
             market=market_filter if market_filter != "All" else None,
@@ -1230,13 +1268,28 @@ if mode == "🔎 Screener":
             rsi_max=rsi_range[1] if rsi_range[1] < 100 else None,
             min_price_change=price_change_range[0] if price_change_range[0] > -80 else None,
             max_price_change=price_change_range[1] if price_change_range[1] < 200 else None,
+            min_dividend_yield=(min_dividend_pct / 100) if min_dividend_pct > 0 else None,
         )
 
         st.markdown(f"**{len(filtered)} match(es)**")
         if filtered:
+            # Reuses the snapshot's own current_price for every ticker
+            # (already fetched to build the snapshot) instead of a
+            # second network call per row just to check accuracy.
+            price_lookup = {row["ticker"]: row["current_price"] for row in snapshot
+                            if row.get("current_price") is not None}
+            per_ticker_accuracy = accuracy_tracker.compute_per_ticker_accuracy(price_lookup)
+
             display_rows = []
             for row in filtered:
                 curr = currency_symbol(row.get("currency", "USD"))
+                acc = per_ticker_accuracy.get(row["ticker"])
+                if acc and acc["accuracy_pct"] is not None:
+                    track_record_display = f"{acc['accuracy_pct']:.0f}% ({acc['judged_count']} calls)"
+                elif acc:
+                    track_record_display = f"Analyzed {acc['times_analyzed']}x, too new to judge"
+                else:
+                    track_record_display = "Not yet analyzed"
                 display_rows.append({
                     "Ticker": row["ticker"],
                     "Company": row.get("company_name", ""),
@@ -1246,6 +1299,7 @@ if mode == "🔎 Screener":
                     "RSI": f"{row['rsi']:.1f}" if row.get("rsi") is not None else "N/A",
                     "Rev Growth": f"{row['revenue_growth_yoy'] * 100:.1f}%" if row.get("revenue_growth_yoy") is not None else "N/A",
                     "Price Chg": f"{row['price_change_pct']:+.1f}%" if row.get("price_change_pct") is not None else "N/A",
+                    "Our Track Record": track_record_display,
                 })
             st.dataframe(pd.DataFrame(display_rows), hide_index=True, use_container_width=True)
 
