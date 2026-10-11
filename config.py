@@ -32,13 +32,17 @@ TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY")
 
 # Persistent storage for the daily analysis cache — same AWS account and
 # region already used for Bedrock, no separate credentials needed. Table
-# is auto-created on first run if it doesn't already exist (see storage.py).
+# is provisioned separately from the application runtime.
 DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "tradedesk_analyses")
+# A production deployment must not appear healthy while silently storing
+# analyses only in process memory. Local development can opt into the
+# original graceful fallback with FAIL_ON_STORAGE_ERROR=false.
+FAIL_ON_STORAGE_ERROR = os.getenv("FAIL_ON_STORAGE_ERROR", "true").lower() == "true"
 
 # ── Model provider ────────────────────────────────────────────────────────────
 # "anthropic" → uses Anthropic API directly (paused — out of credits)
 # "bedrock"   → uses AWS Bedrock (active — running on AWS free credit)
-MODEL_PROVIDER = "bedrock"
+MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "bedrock").lower()
 
 # ── Model selection ───────────────────────────────────────────────────────────
 # Haiku  → all 5 subagents (fast, cheap, focused single-domain tasks)
@@ -55,9 +59,15 @@ MODEL_REASONING = "claude-sonnet-4-6"
 # confirmed and fixed early in this project; the US profile has been
 # working correctly ever since via the Converse API path in
 # src/client/model_client.py.
-BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
-BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-2")
+BEDROCK_MODEL_FAST = os.getenv(
+    "BEDROCK_MODEL_FAST",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+)
+BEDROCK_MODEL_REASONING = os.getenv(
+    "BEDROCK_MODEL_REASONING",
+    "us.anthropic.claude-sonnet-4-6",
+)
+BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-1")
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
 MAX_TOKENS_SUBAGENT   = 1500   # each subagent is focused — doesn't need much

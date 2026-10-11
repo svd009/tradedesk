@@ -52,7 +52,11 @@ import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime
 
-from config import DYNAMODB_TABLE_NAME, BEDROCK_REGION
+from config import (
+    DYNAMODB_TABLE_NAME,
+    FAIL_ON_STORAGE_ERROR,
+    BEDROCK_REGION,
+)
 
 # A reserved partition key value, never a real ticker, used to hold small
 # aggregate counter rows (see _increment_counters / get_usage_stats).
@@ -77,12 +81,18 @@ _dynamo_available = False
 _memory_fallback: dict = {}
 
 
+def _storage_error(message: str, error: Exception):
+    """Raise in production; otherwise log and allow the local fallback."""
+    if FAIL_ON_STORAGE_ERROR:
+        raise RuntimeError(f"{message}: {error}") from error
+    print(f"  [storage] {message} — falling back to in-memory: {error}")
+
+
 def _get_table():
     """
-    Lazily connect to DynamoDB and ensure the table exists, creating it
-    on first run if needed. Returns None (triggering the in-memory
-    fallback everywhere else in this file) if DynamoDB can't be reached
-    at all, rather than raising and crashing the app.
+    Lazily connect to the DynamoDB table provisioned by infrastructure.
+    Returns None (triggering the in-memory fallback everywhere else in
+    this file) when storage is unavailable and local fallback is enabled.
     """
     global _table, _dynamo_available
     if _table is not None:
@@ -97,74 +107,23 @@ def _get_table():
         return _table
     except ClientError as e:
         if e.response["Error"]["Code"] == "ResourceNotFoundException":
-            # Table doesn't exist yet — create it. This only needs to
-            # happen once, ever, per AWS account.
-            try:
-                dynamodb = boto3.resource("dynamodb", region_name=BEDROCK_REGION)
-                table = dynamodb.create_table(
-                    TableName=DYNAMODB_TABLE_NAME,
-                    KeySchema=[
-                        {"AttributeName": "ticker", "KeyType": "HASH"},
-                        {"AttributeName": "window_sig", "KeyType": "RANGE"},
-                    ],
-                    AttributeDefinitions=[
-                        {"AttributeName": "ticker", "AttributeType": "S"},
-                        {"AttributeName": "window_sig", "AttributeType": "S"},
-                    ],
-                    # Provisioned mode, not on-demand (PAY_PER_REQUEST) —
-                    # DynamoDB's Always Free tier (25 RCU/25 WCU, permanent,
-                    # never expires) only applies to provisioned capacity.
-                    # 5 RCU / 3 WCU — bumped up from an initial 1/1, which
-                    # turned out to be too low: DynamoDB Scan operations
-                    # (used for usage stats and accuracy tracking) charge
-                    # capacity based on the SIZE of data read, not row
-                    # count, and each stored analysis can be 5-20KB, so
-                    # even a modest history would have exceeded 1 RCU on
-                    # a single Scan. Still comfortably within the free tier.
-                    BillingMode="PROVISIONED",
-                    ProvisionedThroughput={
-                        "ReadCapacityUnits": 5,
-                        "WriteCapacityUnits": 3,
-                    },
-                )
-                table.wait_until_exists()
-                _table = table
-                _dynamo_available = True
-                return _table
-            except ClientError as create_error:
-                if create_error.response["Error"]["Code"] == "ResourceInUseException":
-                    # Another concurrent request won the race and created
-                    # the table a moment before us — that's success, not
-                    # failure, just connect to what's now there instead
-                    # of falling back.
-                    dynamodb = boto3.resource("dynamodb", region_name=BEDROCK_REGION)
-                    table = dynamodb.Table(DYNAMODB_TABLE_NAME)
-                    table.load()
-                    _table = table
-                    _dynamo_available = True
-                    return _table
-                print(f"  [storage] Could not create DynamoDB table — "
-                      f"falling back to in-memory (not persistent): {create_error}")
-                return None
-            except Exception as create_error:
-                print(f"  [storage] Could not create DynamoDB table — "
-                      f"falling back to in-memory (not persistent): {create_error}")
-                return None
-        else:
-            print(f"  [storage] DynamoDB unreachable ({e}) — "
-                  f"falling back to in-memory (not persistent). "
-                  f"Likely cause: the IAM user needs DynamoDB permissions attached.")
+            _storage_error(
+                f"DynamoDB table {DYNAMODB_TABLE_NAME!r} does not exist; "
+                "deploy the infrastructure before starting the app",
+                e,
+            )
             return None
+        _storage_error("DynamoDB is unreachable", e)
+        return None
     except Exception as e:
-        print(f"  [storage] DynamoDB unreachable ({e}) — "
-              f"falling back to in-memory (not persistent).")
+        _storage_error("DynamoDB is unreachable", e)
         return None
 
 
 def init_db():
     """Kept for interface parity with the previous SQLite version —
-    connecting/creating the table happens lazily in _get_table() on
-    first real use instead, so this is just a no-op trigger."""
+    connecting to the provisioned table happens lazily in _get_table()
+    on first real use instead, so this is just a no-op trigger."""
     _get_table()
 
 
@@ -212,6 +171,8 @@ def get_cached(ticker: str, window_key: str, portfolio_sig: str):
             return None
         return json.loads(item["result_json"]), datetime.fromisoformat(item["cached_at"])
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] DynamoDB read failed ({e}) — treating as cache miss")
         return None
 
@@ -275,6 +236,8 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
         table.put_item(Item=item)
         _increment_counters(table, ticker)
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] DynamoDB write failed ({e}) — "
               f"caching in-memory for this session only")
         with _dynamo_lock:
@@ -322,6 +285,8 @@ def get_all_analyses() -> list:
         )
         return response.get("Items", [])
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] DynamoDB scan failed ({e})")
         return []
 
@@ -365,6 +330,8 @@ def get_usage_stats() -> dict:
         popular = sorted(ticker_counts, key=lambda x: -x[1])[:10]
         return {"total_analyses": total, "most_popular": popular}
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] DynamoDB query failed ({e})")
         return {"total_analyses": 0, "most_popular": []}
 
@@ -409,6 +376,8 @@ def save_screener_row(date_str: str, ticker: str, row: dict):
                 item[key] = str(value)
         table.put_item(Item=item)
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] Screener row write failed for {ticker} ({e})")
         with _dynamo_lock:
             _screener_memory_fallback[(date_str, ticker)] = row
@@ -452,5 +421,7 @@ def get_screener_snapshot(date_str: str) -> list:
             rows.append(row)
         return rows
     except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
         print(f"  [storage] Screener snapshot query failed ({e})")
         return []

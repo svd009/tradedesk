@@ -53,6 +53,7 @@ Usage:
 """
 
 import anthropic
+from botocore.config import Config
 from config import (
     MODEL_PROVIDER, ANTHROPIC_API_KEY,
     MODEL_FAST, MODEL_REASONING,
@@ -85,6 +86,12 @@ class ModelClient:
             return boto3.client(
                 service_name="bedrock-runtime",
                 region_name=BEDROCK_REGION,
+                config=Config(
+                    connect_timeout=10,
+                    read_timeout=120,
+                    max_pool_connections=20,
+                    retries={"max_attempts": 4, "mode": "adaptive"},
+                ),
             )
         except ImportError:
             raise ImportError("boto3 is required for Bedrock. Run: pip install boto3")
