@@ -60,8 +60,30 @@ from config import (
     BEDROCK_MODEL_FAST, BEDROCK_MODEL_REASONING, BEDROCK_MODEL_REGION,
     BEDROCK_API_KEY_SET, IAM_KEYS_SET,
     MAX_TOKENS_SUBAGENT, MAX_TOKENS_SYNTHESIS, THINKING_BUDGET,
-    SYNTHESIS_EFFORT,
+    SYNTHESIS_EFFORT, MODEL_PRICES_PER_MTOK,
 )
+
+
+def read_usage(response) -> dict:
+    """
+    Token counts for one response, in one shape for both providers.
+    Bedrock responses are wrapped (usage is a dict); Anthropic SDK
+    responses carry a usage object with the same two field names.
+    """
+    usage = getattr(response, "usage", None)
+    if isinstance(usage, dict):
+        return {"input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0)}
+    return {"input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0)}
+
+
+def estimate_cost_usd(model_id: str, input_tokens: int, output_tokens: int):
+    """Estimated cost in US dollars, or None if the model has no listed price."""
+    for key, (price_in, price_out) in MODEL_PRICES_PER_MTOK.items():
+        if key in model_id:
+            return round(input_tokens / 1e6 * price_in + output_tokens / 1e6 * price_out, 6)
+    return None
 
 
 def _is_legacy_model(model_id: str) -> bool:
@@ -202,6 +224,10 @@ class ModelClient:
             return self._bedrock_message(
                 model_id, messages, system, tools, use_thinking, tokens
             )
+
+    def model_id_for(self, model: str) -> str:
+        """Public name for _resolve_model, used for usage and cost records."""
+        return self._resolve_model(model)
 
     def _resolve_model(self, model: str) -> str:
         """Map "fast"/"reasoning" to the correct model ID for the active provider."""
@@ -356,6 +382,11 @@ class ConverseResponseWrapper:
         )
         message = raw.get("output", {}).get("message", {})
         self.content = self._parse_content(message.get("content", []))
+        usage = raw.get("usage") or {}
+        self.usage = {
+            "input_tokens": int(usage.get("inputTokens", 0) or 0),
+            "output_tokens": int(usage.get("outputTokens", 0) or 0),
+        }
 
     def _parse_content(self, raw_content: list) -> list:
         """Convert Converse content blocks to Anthropic SDK-compatible objects."""

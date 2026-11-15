@@ -70,6 +70,11 @@ _TOTAL_COUNTER_SIG = "TOTAL"
 # trick as the counters above, just for a batch of ~554 rows instead of
 # a couple of counters.
 _SCREENER_PARTITION = "__SCREENER__"
+# Reserved partition for "this looks wrong" reports sent by users.
+_FEEDBACK_PARTITION = "__FEEDBACK__"
+# Every reserved partition starts with this, so real-analysis scans can
+# exclude all of them with one filter.
+_RESERVED_PREFIX = "__"
 
 _dynamo_lock = threading.Lock()
 _table = None
@@ -127,7 +132,7 @@ def init_db():
     _get_table()
 
 
-def _increment_counters(table, ticker: str):
+def _increment_counters(table, ticker: str, usage: dict = None):
     """
     Atomically bump two small counter rows: one global total, one for
     this specific ticker. DynamoDB's ADD on a numeric attribute creates
@@ -137,10 +142,22 @@ def _increment_counters(table, ticker: str):
     reading all of them back later is cheap.
     """
     try:
+        usage = usage or {}
+        cost = usage.get("estimated_cost_usd")
         table.update_item(
             Key={"ticker": _STATS_PARTITION, "window_sig": _TOTAL_COUNTER_SIG},
-            UpdateExpression="ADD analysis_count :incr",
-            ExpressionAttributeValues={":incr": 1},
+            # Running totals of token usage and cost alongside the count.
+            # Cost is kept in millionths of a dollar, because DynamoDB
+            # counters must be whole numbers to add up exactly.
+            UpdateExpression="ADD analysis_count :incr, tokens_in :ti, "
+                             "tokens_out :to, cost_micro_usd :c, priced_count :p",
+            ExpressionAttributeValues={
+                ":incr": 1,
+                ":ti": int(usage.get("input_tokens", 0) or 0),
+                ":to": int(usage.get("output_tokens", 0) or 0),
+                ":c": int(round((cost or 0) * 1_000_000)),
+                ":p": 1 if cost is not None else 0,
+            },
         )
         table.update_item(
             Key={"ticker": _STATS_PARTITION, "window_sig": f"TICKER#{ticker}"},
@@ -228,13 +245,20 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
             "result_json": result_json,
             "cached_at": cached_at.isoformat(),
         }
+        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+        quality = result.get("quality") if isinstance(result.get("quality"), dict) else {}
+        item["tokens_in"] = int(usage.get("input_tokens", 0) or 0)
+        item["tokens_out"] = int(usage.get("output_tokens", 0) or 0)
+        if usage.get("estimated_cost_usd") is not None:
+            item["cost_usd"] = str(usage["estimated_cost_usd"])
+        item["needs_review"] = bool(quality.get("needs_review", False))
         if baseline_price is not None:
             item["baseline_price"] = str(baseline_price)  # stored as a
                                                             # string to sidestep
                                                             # DynamoDB's Decimal-
                                                             # only Number typing
         table.put_item(Item=item)
-        _increment_counters(table, ticker)
+        _increment_counters(table, ticker, usage)
     except Exception as e:
         if FAIL_ON_STORAGE_ERROR:
             raise
@@ -278,12 +302,23 @@ def get_all_analyses() -> list:
             ]
 
     try:
-        response = table.scan(
-            ProjectionExpression="ticker, recommendation, confidence, baseline_price, cached_at",
-            FilterExpression="ticker <> :stats",
-            ExpressionAttributeValues={":stats": _STATS_PARTITION},
-        )
-        return response.get("Items", [])
+        # A Scan returns at most 1 MB per call, and the filter is applied
+        # AFTER that limit. Without following LastEvaluatedKey, a table
+        # holding many screener rows could return a first page with no
+        # analyses in it at all, and the Track Record would look empty.
+        items, kwargs = [], {
+            "ProjectionExpression": "ticker, recommendation, confidence, baseline_price, cached_at",
+            # Exclude every reserved partition (stats, screener, feedback).
+            "FilterExpression": "NOT begins_with(ticker, :reserved)",
+            "ExpressionAttributeValues": {":reserved": _RESERVED_PREFIX},
+        }
+        while True:
+            response = table.scan(**kwargs)
+            items.extend(response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return items
     except Exception as e:
         if FAIL_ON_STORAGE_ERROR:
             raise
@@ -320,15 +355,25 @@ def get_usage_stats() -> dict:
         items = response.get("Items", [])
 
         total = 0
+        totals_row = {}
         ticker_counts = []
         for item in items:
             if item["window_sig"] == _TOTAL_COUNTER_SIG:
                 total = int(item.get("analysis_count", 0))
+                totals_row = item
             elif item["window_sig"].startswith("TICKER#"):
                 ticker_counts.append((item.get("ticker_name", "?"), int(item.get("analysis_count", 0))))
 
         popular = sorted(ticker_counts, key=lambda x: -x[1])[:10]
-        return {"total_analyses": total, "most_popular": popular}
+        return {
+            "total_analyses": total,
+            "most_popular": popular,
+            # Running totals since token tracking was added.
+            "tokens_in": int(totals_row.get("tokens_in", 0)),
+            "tokens_out": int(totals_row.get("tokens_out", 0)),
+            "cost_usd": int(totals_row.get("cost_micro_usd", 0)) / 1_000_000,
+            "priced_analyses": int(totals_row.get("priced_count", 0)),
+        }
     except Exception as e:
         if FAIL_ON_STORAGE_ERROR:
             raise
@@ -424,4 +469,101 @@ def get_screener_snapshot(date_str: str) -> list:
         if FAIL_ON_STORAGE_ERROR:
             raise
         print(f"  [storage] Screener snapshot query failed ({e})")
+        return []
+
+
+# ── User feedback ("this looks wrong") ─────────────────────────────────────
+
+_feedback_memory_fallback: list = []
+_FEEDBACK_REASONS = ("Price or number looks wrong", "Recommendation doesn't make sense",
+                     "News is outdated or irrelevant", "Something else")
+_MAX_COMMENT_CHARS = 500
+
+
+def save_feedback(ticker: str, reason: str, comment: str = "",
+                  recommendation: str = "", analysis_time: str = "") -> bool:
+    """
+    Store one user report against an analysis. Returns True if saved.
+
+    The comment is free text typed by a member of the public: it is
+    length-capped here and must always be treated as untrusted text
+    wherever it is displayed (never rendered as HTML, never fed to a
+    model as instructions).
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    row = {
+        "ticker": _FEEDBACK_PARTITION,
+        "window_sig": f"{now}#{ticker.upper()}",
+        "stock_ticker": ticker.upper(),
+        "reason": str(reason)[:80],
+        "comment": str(comment or "").strip()[:_MAX_COMMENT_CHARS],
+        "recommendation": str(recommendation or "")[:20],
+        "analysis_time": str(analysis_time or "")[:40],
+        "created_at": now,
+    }
+    table = _get_table()
+    if table is None:
+        with _dynamo_lock:
+            _feedback_memory_fallback.append(row)
+        return True
+    try:
+        table.put_item(Item=row)
+        return True
+    except Exception as e:
+        print(f"  [storage] Feedback write failed ({e})")
+        return False
+
+
+def get_feedback(limit: int = 100) -> list:
+    """Most recent user reports first. A Query on one partition, not a Scan."""
+    table = _get_table()
+    if table is None:
+        with _dynamo_lock:
+            return list(reversed(_feedback_memory_fallback))[:limit]
+    try:
+        response = table.query(
+            KeyConditionExpression="ticker = :fb",
+            ExpressionAttributeValues={":fb": _FEEDBACK_PARTITION},
+            ScanIndexForward=False,  # newest first (sort key starts with the timestamp)
+            Limit=limit,
+        )
+        return response.get("Items", [])
+    except Exception as e:
+        if FAIL_ON_STORAGE_ERROR:
+            raise
+        print(f"  [storage] Feedback query failed ({e})")
+        return []
+
+
+def get_flagged_analyses() -> list:
+    """
+    Analyses the automatic checks marked for review (bad data, an
+    inconsistent answer, numbers not found in the inputs, failed agents).
+    A Scan, so intended for the occasional admin report, not page loads.
+    """
+    table = _get_table()
+    if table is None:
+        with _dynamo_lock:
+            return [
+                {"ticker": k[0], "cached_at": v["cached_at"].isoformat(),
+                 "recommendation": v.get("recommendation")}
+                for k, v in _memory_fallback.items()
+                if isinstance(v.get("result"), dict)
+                and (v["result"].get("quality") or {}).get("needs_review")
+            ]
+    try:
+        items, kwargs = [], {
+            "ProjectionExpression": "ticker, recommendation, cached_at",
+            "FilterExpression": "needs_review = :yes",
+            "ExpressionAttributeValues": {":yes": True},
+        }
+        while True:
+            response = table.scan(**kwargs)
+            items.extend(response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return sorted(items, key=lambda r: r.get("cached_at", ""), reverse=True)
+    except Exception as e:
+        print(f"  [storage] Flagged-analysis scan failed ({e})")
         return []

@@ -15,6 +15,12 @@ from src.orchestrator.parallel_runner import run_subagents_parallel
 from src.orchestrator.synthesis_agent import SynthesisAgent
 from src.data.market_data import get_fundamentals, get_price_history
 from src.data.technical_indicators import run_full_technical_analysis
+from src.data import market_data
+from src.client.model_client import estimate_cost_usd
+from src.evaluation.guardrails import (
+    check_market_data, validate_recommendation, find_ungrounded_numbers,
+)
+from config import TWELVE_DATA_API_KEY
 from config import REPORTS_DIR, DEMO_PORTFOLIO
 
 
@@ -83,7 +89,65 @@ class TradeDesk:
         if verbose:
             print(f"\n  [TradeDesk] Step 2/2: Synthesizing with extended thinking...")
 
-        synthesis = self.synthesis_agent.synthesize(subagent_findings, verbose=verbose)
+        # Guardrail 1: is the raw data sane, before the AI reasons over it?
+        price_data = get_price_history(ticker)
+        data_issues = check_market_data(
+            price_data, fund_meta, self._second_source_price(ticker, price_data)
+        )
+
+        synthesis = self.synthesis_agent.synthesize(
+            subagent_findings, verbose=verbose, data_quality_issues=data_issues,
+        )
+        synthesis_usages = [synthesis.get("usage")]
+
+        # Guardrail 2: is the answer well-formed and self-consistent?
+        # An unusable answer gets one retry. If it is still unusable, stop
+        # here: showing (and caching) a made-up placeholder is worse than
+        # an honest error.
+        rec, output_issues, fatal = validate_recommendation(synthesis.get("recommendation"))
+        if fatal:
+            print(f"  [TradeDesk] Synthesis output unusable for {ticker} ({output_issues}); retrying once")
+            synthesis = self.synthesis_agent.synthesize(
+                subagent_findings, verbose=verbose, data_quality_issues=data_issues,
+            )
+            synthesis_usages.append(synthesis.get("usage"))
+            rec, output_issues, fatal = validate_recommendation(synthesis.get("recommendation"))
+            if fatal:
+                raise RuntimeError(
+                    "The analysis could not be completed reliably this time. Please try again."
+                )
+        synthesis["recommendation"] = rec
+
+        # Guardrail 3: does every quoted number exist in the input data?
+        clean_findings = {
+            k: v for k, v in subagent_findings.items()
+            if k in ("news", "fundamentals", "technical", "macro", "risk")
+        }
+        ungrounded = find_ungrounded_numbers(
+            rec, clean_findings, fund_meta,
+            run_full_technical_analysis(price_data) if price_data.get("closes") else {},
+        )
+        failed_agents = [
+            k for k, v in clean_findings.items()
+            if not isinstance(v, dict) or v.get("error") or v.get("parse_error")
+        ]
+        quality = {
+            "data_issues": data_issues,
+            "output_issues": output_issues,
+            "ungrounded_numbers": ungrounded,
+            "failed_agents": failed_agents,
+        }
+        quality["needs_review"] = bool(
+            data_issues or output_issues or ungrounded or len(failed_agents) >= 2
+        )
+        if quality["needs_review"]:
+            print(f"  [TradeDesk] ⚑ {ticker} flagged for review: {quality}")
+
+        usage = self._total_usage(clean_findings, synthesis_usages)
+        cost = usage["estimated_cost_usd"]
+        print(f"  [TradeDesk] Usage for {ticker}: {usage['input_tokens']:,} in / "
+              f"{usage['output_tokens']:,} out tokens, {usage['calls']} model calls, "
+              f"cost {'$%.4f' % cost if cost is not None else 'not priced'}")
 
         # ── Step 4: Build and save full report ────────────────────
         report = self._build_report(ticker, company_name, sector,
@@ -102,8 +166,61 @@ class TradeDesk:
             "sector": sector,
             "subagent_findings": subagent_findings,
             "synthesis": synthesis,
+            "quality": quality,
+            "usage": usage,
             "report": report,
             "report_path": report_path,
+        }
+
+    @staticmethod
+    def _second_source_price(ticker: str, price_data: dict):
+        """
+        The latest close from Twelve Data, to cross-check Yahoo's price.
+        Only returned when both sources are reporting the same trading
+        day; comparing today's live price with yesterday's close would
+        raise false alarms. None if no key is set or anything fails.
+        """
+        if not TWELVE_DATA_API_KEY or not price_data.get("dates"):
+            return None
+        try:
+            other = market_data._fetch_price_history_twelvedata(ticker, 5)
+            if other.get("closes") and other["dates"][-1][:10] == price_data["dates"][-1][:10]:
+                return other["closes"][-1]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _total_usage(findings: dict, synthesis_usages: list) -> dict:
+        """Add up token usage across the research agents and synthesis."""
+        steps = {}
+        for name, finding in findings.items():
+            if isinstance(finding, dict) and isinstance(finding.get("_usage"), dict):
+                steps[name] = finding["_usage"]
+        synth = {"input_tokens": 0, "output_tokens": 0, "calls": 0, "model": ""}
+        for used in synthesis_usages:
+            if isinstance(used, dict):
+                synth["input_tokens"] += used.get("input_tokens", 0)
+                synth["output_tokens"] += used.get("output_tokens", 0)
+                synth["calls"] += used.get("calls", 1)
+                synth["model"] = used.get("model", synth["model"])
+        steps["synthesis"] = synth
+
+        total_cost, priced = 0.0, True
+        for step in steps.values():
+            cost = estimate_cost_usd(step.get("model", ""), step.get("input_tokens", 0),
+                                     step.get("output_tokens", 0))
+            step["estimated_cost_usd"] = cost
+            if cost is None:
+                priced = False
+            else:
+                total_cost += cost
+        return {
+            "input_tokens": sum(s.get("input_tokens", 0) for s in steps.values()),
+            "output_tokens": sum(s.get("output_tokens", 0) for s in steps.values()),
+            "calls": sum(s.get("calls", 0) for s in steps.values()),
+            "estimated_cost_usd": round(total_cost, 6) if priced else None,
+            "by_step": steps,
         }
 
     @staticmethod

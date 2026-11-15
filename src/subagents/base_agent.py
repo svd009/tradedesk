@@ -25,7 +25,7 @@ Context isolation:
 """
 
 import json
-from src.client.model_client import ModelClient
+from src.client.model_client import ModelClient, read_usage
 from src.mcp_server.market_tools import MarketToolExecutor
 
 
@@ -47,6 +47,14 @@ class BaseAgent:
     def __init__(self, executor: MarketToolExecutor):
         self.client = ModelClient()
         self.executor = executor
+        # Running token total for this agent's whole tool loop.
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def _record_usage(self, response):
+        used = read_usage(response)
+        self.usage["input_tokens"] += used["input_tokens"]
+        self.usage["output_tokens"] += used["output_tokens"]
+        self.usage["calls"] += 1
 
     def _run_loop(self, user_message: str, use_web_search: bool = False,
                   verbose: bool = True) -> str:
@@ -85,6 +93,7 @@ class BaseAgent:
                 system=self.SYSTEM_PROMPT,
                 tools=tools if tools else None,
             )
+            self._record_usage(response)
 
             # ── Tool use requested ────────────────────────────────
             if response.stop_reason == "tool_use":
@@ -145,12 +154,23 @@ class BaseAgent:
             system=self.SYSTEM_PROMPT,
             tools=None,  # no tools — forces a text answer, can't loop further
         )
+        self._record_usage(fallback_response)
         return "".join(
             block.text for block in fallback_response.content
             if hasattr(block, "text")
         )
 
     def _parse_json(self, raw: str) -> dict:
+        """
+        Safely parse JSON from agent output, and attach this agent's
+        token usage under "_usage" (every agent calls this exactly once,
+        right after its tool loop, so it is the one shared place to do it).
+        """
+        result = self._parse_json_text(raw)
+        result["_usage"] = {**self.usage, "model": self.client.model_id_for("fast")}
+        return result
+
+    def _parse_json_text(self, raw: str) -> dict:
         """
         Safely parse JSON from agent output.
         Strips markdown code fences if present.

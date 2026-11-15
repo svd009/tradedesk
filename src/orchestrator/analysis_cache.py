@@ -1,9 +1,13 @@
 """
 analysis_cache.py
 ───────────────────
-Daily, shared cache for full TradeDesk analyses, with cache-stampede
-protection. Backed by SQLite (via storage.py) so cached results survive
-app restarts, rather than an in-memory dict that would reset every time.
+Shared cache for full TradeDesk analyses, with cache-stampede protection.
+Backed by DynamoDB (via storage.py) so cached results survive restarts.
+
+Freshness (see "Market-session windows" in the code): an analysis is reused
+only within the market session it was made in, and is redone early if the
+price moves sharply. The "6 AM daily boundary" described below now applies
+only to the Screener's once-a-day snapshot (_current_window).
 
 Why this exists:
   Without it, every single request for a ticker re-runs the full 5-agent
@@ -47,7 +51,7 @@ from zoneinfo import ZoneInfo
 
 from src.orchestrator import storage
 from src.orchestrator.concurrency_limiter import ConcurrencyLimiter, ConcurrencyLimitExceeded
-from config import CONCURRENCY_CAP
+from config import CONCURRENCY_CAP, PRICE_MOVE_REFRESH_PCT
 
 _RESET_HOUR_ET = 6  # 6 AM US Eastern — the daily reset boundary
 _concurrency_limiter = ConcurrencyLimiter(max_concurrent=CONCURRENCY_CAP)
@@ -76,6 +80,83 @@ def _current_window() -> str:
     return window_date.isoformat()
 
 
+# ── Market-session windows ────────────────────────────────────────────────────
+# A saved analysis is only reused inside the market session it was made in.
+# Each market has four sessions per trading day, in its own local time:
+#
+#   pre     before the open           (news is moving, prices are not)
+#   am      first half of trading
+#   pm      second half of trading
+#   close   after the close, until the next trading morning
+#
+# So someone at 2 PM gets an analysis made that afternoon, never one from
+# 6 AM, and someone at midnight gets the after-close one, which is still
+# correct because the market has not traded since. Weekends belong to
+# Friday's "close" session. Public holidays are not modelled: a holiday is
+# treated as a normal day, which costs a few extra refreshes and nothing else.
+_SESSIONS = {
+    "us": {
+        "tz": _ET,
+        # (label, start as (hour, minute)); the session runs until the next start
+        "starts": [("pre", (6, 0)), ("am", (9, 30)), ("pm", (12, 45)), ("close", (16, 15))],
+    },
+    "in": {
+        "tz": ZoneInfo("Asia/Kolkata"),
+        "starts": [("pre", (7, 0)), ("am", (9, 15)), ("pm", (12, 20)), ("close", (15, 45))],
+    },
+}
+
+
+def _market_of(ticker: str) -> str:
+    return "in" if ticker.upper().endswith((".NS", ".BO")) else "us"
+
+
+def _previous_trading_day(day):
+    day -= timedelta(days=1)
+    while day.weekday() >= 5:  # Saturday, Sunday
+        day -= timedelta(days=1)
+    return day
+
+
+def analysis_window(ticker: str, now: datetime = None) -> str:
+    """
+    The market-session window a moment falls into, e.g. "2026-11-13-us-pm".
+    Two requests share a cached analysis only if this string matches.
+    """
+    market = _market_of(ticker)
+    spec = _SESSIONS[market]
+    local = (now or datetime.now(spec["tz"])).astimezone(spec["tz"])
+    day, minutes = local.date(), local.hour * 60 + local.minute
+
+    first_start = spec["starts"][0][1][0] * 60 + spec["starts"][0][1][1]
+    if day.weekday() >= 5 or minutes < first_start:
+        # Weekend, or before this morning's first session: still the
+        # previous trading day's after-close session.
+        return f"{_previous_trading_day(day).isoformat()}-{market}-close"
+
+    label = spec["starts"][0][0]
+    for name, (hour, minute) in spec["starts"]:
+        if minutes >= hour * 60 + minute:
+            label = name
+    return f"{day.isoformat()}-{market}-{label}"
+
+
+def _price_moved_too_far(result: dict, current_price) -> bool:
+    """
+    True if the price has moved more than PRICE_MOVE_REFRESH_PCT since the
+    cached analysis was made, so it should be redone even inside its window.
+    """
+    if not isinstance(current_price, (int, float)) or current_price <= 0:
+        return False
+    try:
+        baseline = float(result["subagent_findings"]["technical"]["key_levels"]["current_price"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if baseline <= 0:
+        return False
+    return abs(current_price - baseline) / baseline * 100 >= PRICE_MOVE_REFRESH_PCT
+
+
 def _portfolio_sig(portfolio: dict = None) -> str:
     """Same portfolio-hashing logic as before, just pulled into its own
     function now that storage.py needs it as a separate column rather
@@ -100,7 +181,7 @@ def _get_ticker_lock(key: str) -> threading.Lock:
 
 
 def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
-                   force_refresh: bool = False) -> tuple:
+                   force_refresh: bool = False, current_price=None) -> tuple:
     """
     Return a cached analysis if one exists for the current window, or
     compute a fresh one (with stampede protection) if not.
@@ -113,6 +194,10 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
         force_refresh: bypass the cache entirely and recompute, used by
                        the UI's manual "Refresh" button
 
+        current_price: the live price, if the caller already has it. A
+                       cached analysis is discarded if the price has
+                       moved more than PRICE_MOVE_REFRESH_PCT since.
+
     Returns:
         (result: dict, was_cached: bool, cached_at: datetime)
 
@@ -123,14 +208,18 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
         module docstring for why.
     """
     ticker = ticker.upper()
-    window = _current_window()
+    window = analysis_window(ticker)
     portfolio_sig = _portfolio_sig(portfolio)
 
     if not force_refresh:
         hit = storage.get_cached(ticker, window, portfolio_sig)
         if hit:
             result, cached_at = hit
-            return result, True, cached_at
+            if not _price_moved_too_far(result, current_price):
+                return result, True, cached_at
+            # The price has moved a lot since this was made (current_price
+            # is the live price the caller just fetched). Fall through and
+            # recompute; the new result overwrites this window's entry.
 
     # This is a genuine cache miss — a real, expensive analysis is about
     # to run. Check the GLOBAL concurrency cap before even attempting the
@@ -154,7 +243,8 @@ def get_or_compute(ticker: str, compute_fn, portfolio: dict = None,
                 hit = storage.get_cached(ticker, window, portfolio_sig)
                 if hit:
                     result, cached_at = hit
-                    return result, True, cached_at
+                    if not _price_moved_too_far(result, current_price):
+                        return result, True, cached_at
 
             result = compute_fn()
             cached_at = datetime.now(_ET)

@@ -134,6 +134,25 @@ RATE_LIMIT_REFILL_SECONDS_PER_TOKEN = 600
 CONCURRENCY_CAP = 10
 SEC_FILING_CHARS      = 8000   # max chars to extract from SEC filings
 
+# ── Cache freshness ───────────────────────────────────────────────────────────
+# A saved analysis is reused only within the same market session (see
+# analysis_cache.py). On top of that, if the price has moved by this many
+# percent since the analysis was made, it is refreshed regardless.
+PRICE_MOVE_REFRESH_PCT = 3.0
+# Show a small "Updated 2:05 PM ET" line on each result.
+SHOW_UPDATED_TIME = True
+
+# ── Cost tracking ─────────────────────────────────────────────────────────────
+# US dollars per million tokens (input, output), matched by a piece of the
+# model ID. Used only to estimate cost in logs and stored usage records.
+# Models not listed here are logged with token counts and no cost, so add
+# a line here (from the Bedrock pricing page) when changing models.
+MODEL_PRICES_PER_MTOK = {
+    "claude-haiku-4-5":  (1.00, 5.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-sonnet-4-5": (3.00, 15.00),
+}
+
 # ── Portfolio defaults ────────────────────────────────────────────────────────
 # Used as example portfolio in demo mode
 DEMO_PORTFOLIO = {

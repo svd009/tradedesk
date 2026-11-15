@@ -28,6 +28,7 @@ from src.orchestrator import analysis_cache
 from src.orchestrator import screener
 from src.orchestrator.concurrency_limiter import ConcurrencyLimitExceeded
 from src.orchestrator import accuracy_tracker
+from src.orchestrator import storage
 from src.orchestrator.rate_limiter import get_user_bucket
 from src.evaluation.eval_framework import TradeDeskevaluator
 from src.data.market_data import get_price_history, get_fundamentals
@@ -38,6 +39,7 @@ from src.data.technical_indicators import (
     run_full_technical_analysis, compute_sma_series,
     compute_bollinger_bands, compute_support_resistance,
 )
+from config import SHOW_UPDATED_TIME
 from config import DEMO_PORTFOLIO, PRICE_HISTORY_DAYS, RATE_LIMIT_BUCKET_CAPACITY, RATE_LIMIT_REFILL_SECONDS_PER_TOKEN
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -865,9 +867,15 @@ def render_single_stock_result(result):
 
         if failed_count >= 3:
             st.caption(
-                f"⚠️ {failed_count} of {total_subagents} research subagents didn't return "
-                "data for this one — see Deep Research below for specifics."
+                f"⚠️ {failed_count} of {total_subagents} research areas had no "
+                "data for this one. See Deep Research below for specifics."
             )
+        updated_at = st.session_state.get("last_cached_at")
+        if SHOW_UPDATED_TIME and updated_at is not None:
+            try:
+                st.caption("Updated " + updated_at.strftime("%b %d, %I:%M %p ET").replace(" 0", " "))
+            except Exception:
+                pass
 
     def render_case(items):
         """
@@ -1007,10 +1015,41 @@ def render_single_stock_result(result):
             file_name=f"tradedesk_{ticker}_{result['report']['report_id']}.json",
             mime="application/json",
         )
-        elapsed = result["subagent_findings"].get("elapsed_seconds", 0)
-        st.caption(f"Analysis completed in {elapsed}s · "
-                   f"5 subagents ran in parallel · "
-                   f"Synthesis used extended thinking")
+
+    render_feedback_box(ticker, rec, result["synthesis"].get("generated_at", ""))
+
+
+_MAX_FEEDBACK_PER_SESSION = 5
+
+
+def render_feedback_box(ticker, recommendation, analysis_time):
+    """
+    A small "something look wrong?" form under each result. This is the
+    human check on the system: real users flagging results that look off,
+    saved for review. One report per result, a few per browser session.
+    """
+    sent = st.session_state.setdefault("feedback_sent", [])
+    result_key = f"{ticker}|{analysis_time}"
+
+    with st.expander("Something look wrong? Let us know"):
+        if result_key in sent:
+            st.caption("Thanks, your report was received.")
+            return
+        if len(sent) >= _MAX_FEEDBACK_PER_SESSION:
+            st.caption("Thanks for the reports. You've reached the limit for this visit.")
+            return
+        with st.form(key=f"feedback_form_{ticker}", clear_on_submit=True, border=False):
+            reason = st.radio("What looks wrong?", storage._FEEDBACK_REASONS,
+                              key=f"feedback_reason_{ticker}")
+            comment = st.text_area("Details (optional)", max_chars=500,
+                                   key=f"feedback_comment_{ticker}",
+                                   placeholder="For example: the price shown is 210 but it is trading at 245.")
+            if st.form_submit_button("Send report"):
+                if storage.save_feedback(ticker, reason, comment, recommendation, analysis_time):
+                    sent.append(result_key)
+                    st.rerun()
+                else:
+                    st.caption("Couldn't save that just now. Please try again later.")
 
 
 def render_portfolio_result(result):
@@ -1158,6 +1197,9 @@ if run_button or st.session_state.pop("auto_run_requested", False):
                     ticker_input, _run_real_analysis,
                     portfolio=portfolio_for_analysis,
                     force_refresh=force_refresh,
+                    # Live price from the ticker check above: lets the cache
+                    # refresh early if the stock has moved sharply.
+                    current_price=precheck.get("current_price"),
                 )
             status_container.empty()
             progress_bar.empty()
@@ -1174,8 +1216,14 @@ if run_button or st.session_state.pop("auto_run_requested", False):
                 "Please try again in about 30 minutes."
             )
         except Exception as e:
-            st.error(f"Analysis failed: {str(e)}")
-            st.exception(e)
+            status_container.empty()
+            progress_bar.empty()
+            # Full details go to the server log, not to the public page.
+            print(f"  [app] Analysis failed for {ticker_input}: {type(e).__name__}: {e}")
+            if isinstance(e, RuntimeError) and "could not be completed reliably" in str(e):
+                st.error(str(e))
+            else:
+                st.error("Something went wrong while analysing this stock. Please try again in a moment.")
 
     else:
         if not portfolio_input:
@@ -1220,8 +1268,8 @@ if run_button or st.session_state.pop("auto_run_requested", False):
                     st.session_state.last_mode = "portfolio"
                     analysis_just_finished = True
                 except Exception as e:
-                    st.error(f"Analysis failed: {str(e)}")
-                    st.exception(e)
+                    print(f"  [app] Portfolio analysis failed: {type(e).__name__}: {e}")
+                    st.error("Something went wrong while analysing this portfolio. Please try again in a moment.")
                 finally:
                     analysis_cache.release_concurrency_slot()
 
