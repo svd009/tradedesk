@@ -176,8 +176,8 @@ def _fetch_price_history_twelvedata(ticker: str, days: int) -> dict:
             "period_days": days,
             "current_price": round(current_price, 2),
             "price_change_pct": round(price_change_pct, 2),
-            "high_52w": round(max(highs), 2),
-            "low_52w": round(min(lows), 2),
+            "high_52w": round(max(highs[-252:]), 2),
+            "low_52w": round(min(lows[-252:]), 2),
             "avg_volume": int(sum(volumes) / len(volumes)) if volumes else 0,
             "currency": data.get("meta", {}).get("currency", "USD"),
             "dates": dates,
@@ -197,8 +197,19 @@ def _fetch_price_history(ticker: str, days: int) -> dict:
         stock = yf.Ticker(ticker)
         end = datetime.now()
         start = end - timedelta(days=days)
-        hist = stock.history(start=start, end=end)
+        # auto_adjust=False: prices are still adjusted for stock splits, but
+        # NOT shifted down for past dividends. yfinance's default rewrites
+        # history for every dividend paid, so older prices no longer match
+        # what the stock actually traded at (or what any other site shows).
+        hist = stock.history(start=start, end=end, auto_adjust=False)
 
+        if hist.empty:
+            return {"ticker": ticker, "error": f"No price data found for {ticker}"}
+
+        # Yahoo occasionally returns a row with no close (a holiday, or
+        # today's bar before the market opens). Left in, it would make the
+        # "current price" NaN and poison every indicator.
+        hist = hist.dropna(subset=["Close"])
         if hist.empty:
             return {"ticker": ticker, "error": f"No price data found for {ticker}"}
 
@@ -206,7 +217,7 @@ def _fetch_price_history(ticker: str, days: int) -> dict:
         highs = hist["High"].tolist()
         lows = hist["Low"].tolist()
         closes = hist["Close"].tolist()
-        volumes = hist["Volume"].tolist()
+        volumes = hist["Volume"].fillna(0).astype(int).tolist()
         dates = [d.strftime("%Y-%m-%d") for d in hist.index]
 
         current_price = closes[-1]
@@ -214,8 +225,10 @@ def _fetch_price_history(ticker: str, days: int) -> dict:
         price_change_pct = ((current_price - start_price) / start_price) * 100
 
         info = stock.info
-        high_52w = info.get("fiftyTwoWeekHigh", max(closes))
-        low_52w = info.get("fiftyTwoWeekLow", min(closes))
+        # Fallback uses the last 252 trading days (one year), not the whole
+        # ~20-month window that was fetched.
+        high_52w = info.get("fiftyTwoWeekHigh") or max(highs[-252:])
+        low_52w = info.get("fiftyTwoWeekLow") or min(lows[-252:])
         currency = info.get("currency", "USD")  # e.g. "INR" for .NS/.BO tickers
 
         return {

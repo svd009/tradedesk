@@ -14,6 +14,7 @@ from datetime import datetime
 from src.orchestrator.parallel_runner import run_subagents_parallel
 from src.orchestrator.synthesis_agent import SynthesisAgent
 from src.data.market_data import get_fundamentals, get_price_history
+from src.data.technical_indicators import run_full_technical_analysis
 from config import REPORTS_DIR, DEMO_PORTFOLIO
 
 
@@ -73,6 +74,11 @@ class TradeDesk:
             status_callback=status_callback,
         )
 
+        # Numbers must come from data, not from a language model retyping
+        # them. Overwrite the price levels the technical agent reported
+        # with the values computed directly from the price history.
+        self._ground_price_levels(ticker, subagent_findings)
+
         # ── Step 3: Synthesis ─────────────────────────────────────
         if verbose:
             print(f"\n  [TradeDesk] Step 2/2: Synthesizing with extended thinking...")
@@ -99,6 +105,46 @@ class TradeDesk:
             "report": report,
             "report_path": report_path,
         }
+
+    @staticmethod
+    def _ground_price_levels(ticker: str, subagent_findings: dict) -> None:
+        """
+        Replace key_levels in the technical finding with computed values.
+
+        The technical agent reads these numbers from a tool result and
+        types them back out in its JSON answer. That copy step can go
+        wrong (a rounded, stale, or simply mistyped figure), and those
+        figures are shown to users and stored as the baseline price the
+        accuracy tracker later judges the call against. The agent's
+        interpretation is kept; only the raw numbers are replaced.
+        """
+        technical = subagent_findings.get("technical")
+        if not isinstance(technical, dict) or technical.get("error"):
+            return
+        try:
+            price_data = get_price_history(ticker)  # cached: same call the agent's tool made
+            if price_data.get("error") or not price_data.get("closes"):
+                return
+            tech = run_full_technical_analysis(price_data)
+            sr = tech.get("support_resistance") or {}
+            computed = {
+                "support": sr.get("support"),
+                "resistance": sr.get("resistance"),
+                "current_price": tech.get("current_price"),
+                "sma_200": (tech.get("moving_averages") or {}).get("sma200"),
+                "rsi": tech.get("rsi"),
+            }
+            levels = technical.get("key_levels")
+            if not isinstance(levels, dict):
+                levels = {}
+            for key, value in computed.items():
+                if value is not None:
+                    levels[key] = value
+            technical["key_levels"] = levels
+            if computed["sma_200"] is not None and computed["current_price"] is not None:
+                technical["price_above_sma_200"] = computed["current_price"] > computed["sma_200"]
+        except Exception as e:
+            print(f"  [TradeDesk] Could not verify price levels for {ticker}: {e}")
 
     def analyze_portfolio(self, portfolio: dict = None,
                           verbose: bool = True,

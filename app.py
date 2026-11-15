@@ -795,6 +795,31 @@ def _count_failed_subagents(subagent_findings: dict) -> tuple:
     return failed, len(_AGENT_KEYS)
 
 
+def _latest_key_levels(ticker, fallback):
+    """
+    Support, resistance, price, 200-day SMA and RSI computed directly
+    from the latest price history (the same data the chart draws).
+    Falls back to the stored values if price data is unavailable.
+    """
+    try:
+        price_data = get_price_history(ticker)  # short-lived cache, shared with the chart
+        if price_data.get("error") or not price_data.get("closes"):
+            return fallback
+        tech = run_full_technical_analysis(price_data)
+        sr = tech.get("support_resistance") or {}
+        latest = {
+            "support": sr.get("support"),
+            "resistance": sr.get("resistance"),
+            "current_price": tech.get("current_price"),
+            "sma_200": (tech.get("moving_averages") or {}).get("sma200"),
+            "rsi": tech.get("rsi"),
+        }
+        latest = {k: v for k, v in latest.items() if v is not None}
+        return latest or fallback
+    except Exception:
+        return fallback
+
+
 def render_single_stock_result(result):
     rec_data = result["synthesis"]["recommendation"]
     ticker = result["ticker"]
@@ -934,6 +959,10 @@ def render_single_stock_result(result):
         for tab, key in zip(subagent_tabs, agent_keys):
             with tab:
                 data = findings.get(key, {})
+                if key == "technical" and isinstance(data, dict) and not data.get("error"):
+                    # Show price levels computed from the latest price data,
+                    # so they always agree with the chart.
+                    data = {**data, "key_levels": _latest_key_levels(ticker, data.get("key_levels"))}
                 if data:
                     render_subagent_finding(data, currency=curr)
                 else:

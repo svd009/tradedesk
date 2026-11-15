@@ -46,7 +46,7 @@ TOOL_SCHEMAS = [
     {
         "name": "get_price_and_technicals",
         "description": (
-            "Fetch 6-month price history and compute all technical analysis "
+            "Fetch price history (about 20 months) and compute all technical analysis "
             "indicators for a stock ticker: moving averages (SMA 20/50/200), "
             "RSI, MACD, golden/death cross, support/resistance levels, and "
             "volume signals. Use this to assess price trend and momentum."
