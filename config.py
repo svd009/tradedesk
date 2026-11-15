@@ -47,8 +47,8 @@ MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "bedrock").lower()
 # ── Model selection ───────────────────────────────────────────────────────────
 # Haiku  → all 5 subagents (fast, cheap, focused single-domain tasks)
 # Sonnet → synthesis agent (complex conflict resolution + extended thinking)
-MODEL_FAST      = "claude-haiku-5-5"
-MODEL_REASONING = "claude-sonnet-5-5"
+MODEL_FAST      = "claude-haiku-4-5"
+MODEL_REASONING = "claude-sonnet-4-6"
 
 # Bedrock model IDs (used when MODEL_PROVIDER = "bedrock")
 # These are cross-region inference profile IDs, not raw model IDs — Bedrock
@@ -60,19 +60,16 @@ MODEL_REASONING = "claude-sonnet-5-5"
 # working correctly ever since via the Converse API path in
 # src/client/model_client.py.
 #
-# To roll back to the previous generation, swap these two lines for:
-#   BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-#   BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
-# model_client.py detects the generation from the ID and sends the right
-# thinking settings for each, so nothing else needs to change.
 # Both can be overridden with environment variables of the same name.
+# A newer generation can be tried later by setting those two variables;
+# model_client.py picks the right thinking settings from the model ID.
 BEDROCK_MODEL_FAST = os.getenv(
     "BEDROCK_MODEL_FAST",
-    "us.anthropic.claude-haiku-5-5",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 )
 BEDROCK_MODEL_REASONING = os.getenv(
     "BEDROCK_MODEL_REASONING",
-    "us.anthropic.claude-sonnet-5-5",
+    "us.anthropic.claude-sonnet-4-6",
 )
 # Two regions, because they can legitimately differ:
 #   BEDROCK_REGION        general AWS region. storage.py uses it for the
@@ -97,16 +94,13 @@ IAM_KEYS_SET = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACC
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
 MAX_TOKENS_SUBAGENT   = 1500   # each subagent is focused — doesn't need much
-MAX_TOKENS_SYNTHESIS  = 8000   # On the 5.x models, thinking tokens count
-                                # toward this limit (it caps thinking + answer
-                                # together), so it needs real headroom or the
+MAX_TOKENS_SYNTHESIS  = 8000   # Caps thinking + answer together, so it needs
+                                # real headroom above THINKING_BUDGET or the
                                 # JSON answer gets cut off mid-way.
-SYNTHESIS_EFFORT      = "medium"  # 5.x models: how hard the synthesis agent
-                                # thinks. low | medium | high | xhigh | max.
-                                # Higher = better reasoning, slower, costlier.
-THINKING_BUDGET       = 3000   # Only used by 4.x models (rollback path).
-                                # The 5.x models reject a fixed budget and
-                                # use SYNTHESIS_EFFORT instead.
+THINKING_BUDGET       = 3000   # Tokens the synthesis agent may spend
+                                # reasoning before it writes its answer.
+SYNTHESIS_EFFORT      = "medium"  # Not used by the current models. Only read
+                                # if a newer-generation model is configured.
 
 # ── Data settings ─────────────────────────────────────────────────────────────
 PRICE_HISTORY_DAYS    = 600    # ~20 months — covers back to ~Jan 2025 for the
