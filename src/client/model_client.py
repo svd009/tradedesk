@@ -52,14 +52,60 @@ Usage:
   # response.content, response.stop_reason — same interface regardless of provider
 """
 
-import anthropic
-from botocore.config import Config
+import re
+
 from config import (
     MODEL_PROVIDER, ANTHROPIC_API_KEY,
     MODEL_FAST, MODEL_REASONING,
-    BEDROCK_MODEL_FAST, BEDROCK_MODEL_REASONING, BEDROCK_REGION,
+    BEDROCK_MODEL_FAST, BEDROCK_MODEL_REASONING, BEDROCK_MODEL_REGION,
+    BEDROCK_API_KEY_SET, IAM_KEYS_SET,
     MAX_TOKENS_SUBAGENT, MAX_TOKENS_SYNTHESIS, THINKING_BUDGET,
+    SYNTHESIS_EFFORT,
 )
+
+
+def _is_legacy_model(model_id: str) -> bool:
+    """
+    True for the Claude 3.x / 4.x generation, False for 5.x and later.
+
+    The two generations take different thinking settings:
+      4.x  → thinking is off unless asked for, and is asked for with a
+             fixed token budget ({"type": "enabled", "budget_tokens": N}).
+      5.x  → thinking is ON by default, a fixed budget is rejected with a
+             400 error, and depth is controlled by an "effort" level.
+    """
+    match = re.search(r"claude-(?:[a-z]+-)?(\d+)", model_id)
+    return bool(match) and int(match.group(1)) < 5
+
+
+def thinking_fields(model_id: str, use_thinking: bool) -> dict:
+    """
+    The provider-neutral thinking settings for one request. The same dict
+    is valid for the Anthropic API (as top-level params) and for Bedrock
+    Converse (inside additionalModelRequestFields).
+    """
+    if _is_legacy_model(model_id):
+        if use_thinking:
+            return {"thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET}}
+        return {}
+
+    if use_thinking:
+        # "summarized" asks for readable reasoning text back; the 5.x
+        # default ("omitted") returns an empty thinking block.
+        return {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": SYNTHESIS_EFFORT},
+        }
+
+    # Thinking is on by default on 5.x, so the research agents must turn
+    # it off explicitly. Two reasons: it would eat into their small
+    # max_tokens, and thinking blocks would have to be replayed unchanged
+    # on every turn of the tool loop (this client drops them).
+    if "sonnet-5-5" in model_id:
+        # Sonnet 5.5 rejects "disabled"; this is its lowest setting.
+        return {"thinking": {"type": "between_tools"},
+                "output_config": {"effort": "medium"}}
+    return {"thinking": {"type": "disabled"}}
 
 
 class ModelClient:
@@ -73,6 +119,14 @@ class ModelClient:
     def __init__(self):
         self.provider = MODEL_PROVIDER
         if self.provider == "anthropic":
+            # Imported here, not at the top of the file, so a Bedrock-only
+            # deployment never needs the anthropic package or its API key.
+            import anthropic
+            if not ANTHROPIC_API_KEY:
+                raise RuntimeError(
+                    'MODEL_PROVIDER is "anthropic" but ANTHROPIC_API_KEY is not set. '
+                    'Set the key, or switch MODEL_PROVIDER to "bedrock" in config.py.'
+                )
             self._client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
         elif self.provider == "bedrock":
             self._client = self._init_bedrock()
@@ -80,21 +134,45 @@ class ModelClient:
             raise ValueError(f"Unknown MODEL_PROVIDER: {self.provider}")
 
     def _init_bedrock(self):
-        """Initialize AWS Bedrock client via boto3."""
+        """
+        Initialize the AWS Bedrock client via boto3.
+
+        boto3 reads the credentials from the environment by itself. If a
+        Bedrock API key (AWS_BEARER_TOKEN_BEDROCK) is set it is used for
+        Bedrock calls; otherwise the IAM keys are. An ANTHROPIC_API_KEY
+        is never used on this path.
+        """
         try:
             import boto3
-            return boto3.client(
-                service_name="bedrock-runtime",
-                region_name=BEDROCK_REGION,
-                config=Config(
-                    connect_timeout=10,
-                    read_timeout=120,
-                    max_pool_connections=20,
-                    retries={"max_attempts": 4, "mode": "adaptive"},
-                ),
-            )
         except ImportError:
             raise ImportError("boto3 is required for Bedrock. Run: pip install boto3")
+
+        if not (BEDROCK_API_KEY_SET or IAM_KEYS_SET):
+            # Not fatal: boto3 can also find credentials in ~/.aws or an
+            # attached IAM role (e.g. on App Runner). Just make the most
+            # common misconfiguration easy to spot in the logs.
+            print("  [ModelClient] ⚠ Neither AWS_BEARER_TOKEN_BEDROCK nor "
+                  "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY is set in the environment.")
+
+        if BEDROCK_API_KEY_SET:
+            major, minor = (int(x) for x in boto3.__version__.split(".")[:2])
+            if (major, minor) < (1, 39):
+                raise RuntimeError(
+                    f"boto3 {boto3.__version__} is too old to use a Bedrock API key "
+                    "(AWS_BEARER_TOKEN_BEDROCK). Run: pip install -U boto3"
+                )
+
+        from botocore.config import Config
+        return boto3.client(
+            service_name="bedrock-runtime",
+            region_name=BEDROCK_MODEL_REGION,
+            config=Config(
+                connect_timeout=10,
+                read_timeout=120,
+                max_pool_connections=20,
+                retries={"max_attempts": 4, "mode": "adaptive"},
+            ),
+        )
 
     def create_message(self, model: str, messages: list, system: str = "",
                        tools: list = None, use_thinking: bool = False,
@@ -107,7 +185,7 @@ class ModelClient:
             messages:     List of message dicts
             system:       System prompt string
             tools:        List of tool schemas (optional)
-            use_thinking: Enable extended thinking (Sonnet only)
+            use_thinking: Enable thinking (used by the synthesis agent)
             max_tokens:   Override default token limit
 
         Returns:
@@ -144,8 +222,7 @@ class ModelClient:
             params["system"] = system
         if tools:
             params["tools"] = tools
-        if use_thinking:
-            params["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+        params.update(thinking_fields(model_id, use_thinking))
 
         return self._client.messages.create(**params)
 
@@ -174,10 +251,9 @@ class ModelClient:
         if converse_tools:
             params["toolConfig"] = {"tools": converse_tools}
 
-        if use_thinking:
-            params["additionalModelRequestFields"] = {
-                "thinking": {"type": "enabled", "budget_tokens": THINKING_BUDGET}
-            }
+        extra = thinking_fields(model_id, use_thinking)
+        if extra:
+            params["additionalModelRequestFields"] = extra
 
         response = self._client.converse(**params)
         return ConverseResponseWrapper(response)

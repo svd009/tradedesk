@@ -59,7 +59,7 @@ TradeDesk Orchestrator
 TradeDesk runs on **AWS Bedrock**, not the direct Anthropic API, primarily to run on AWS's free-tier credit. A few things worth knowing:
 
 - It uses Bedrock's **Converse API**, not the raw `InvokeModel` operation, since the latter doesn't reliably support tool use for these models.
-- It uses **cross-region inference profiles** (e.g. `us.anthropic.claude-sonnet-4-6`), which some newer Claude models require on Bedrock instead of a raw model ID.
+- It uses **cross-region inference profiles** (e.g. `us.anthropic.claude-sonnet-5-5`), which some newer Claude models require on Bedrock instead of a raw model ID.
 - Switching providers is a single line in `config.py` (`MODEL_PROVIDER = "anthropic"` or `"bedrock"`), every subagent and tool call flows through one abstracted `ModelClient` class that doesn't know or care which provider is active.
 
 ```python

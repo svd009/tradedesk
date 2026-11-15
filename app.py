@@ -1038,6 +1038,7 @@ if "last_result" not in st.session_state:
     st.session_state.last_mode = None
 
 if run_button or st.session_state.pop("auto_run_requested", False):
+    analysis_just_finished = False
     bucket = get_user_bucket(
         st.session_state,
         capacity=RATE_LIMIT_BUCKET_CAPACITY,
@@ -1135,6 +1136,7 @@ if run_button or st.session_state.pop("auto_run_requested", False):
             st.session_state.last_mode = "single"
             st.session_state.last_was_cached = was_cached
             st.session_state.last_cached_at = cached_at
+            analysis_just_finished = True
         except ConcurrencyLimitExceeded:
             status_container.empty()
             progress_bar.empty()
@@ -1187,11 +1189,22 @@ if run_button or st.session_state.pop("auto_run_requested", False):
                     )
                     st.session_state.last_result = result
                     st.session_state.last_mode = "portfolio"
+                    analysis_just_finished = True
                 except Exception as e:
                     st.error(f"Analysis failed: {str(e)}")
                     st.exception(e)
                 finally:
                     analysis_cache.release_concurrency_slot()
+
+    # A fresh analysis draws spinners and a progress bar above the result.
+    # Those are gone on the next rerun, so the result's tabs sit at a
+    # different position on the page and the browser treats them as new
+    # tabs, snapping back to "Overview" the first time any chart control
+    # (e.g. Line/Candlestick) is touched. Rerunning once here means the
+    # result is ALWAYS drawn from session state, in the same position, so
+    # the selected tab survives. Errors skip this, so they stay visible.
+    if analysis_just_finished:
+        st.rerun()
 
 # ── Screener: discovery/filtering across the whole ticker universe ──────────
 if mode == "🔎 Screener":

@@ -37,7 +37,7 @@ DYNAMODB_TABLE_NAME = os.getenv("DYNAMODB_TABLE_NAME", "tradedesk_analyses")
 # A production deployment must not appear healthy while silently storing
 # analyses only in process memory. Local development can opt into the
 # original graceful fallback with FAIL_ON_STORAGE_ERROR=false.
-FAIL_ON_STORAGE_ERROR = os.getenv("FAIL_ON_STORAGE_ERROR", "true").lower() == "true"
+FAIL_ON_STORAGE_ERROR = os.getenv("FAIL_ON_STORAGE_ERROR", "true").strip().lower() == "true"
 
 # ── Model provider ────────────────────────────────────────────────────────────
 # "anthropic" → uses Anthropic API directly (paused — out of credits)
@@ -47,8 +47,8 @@ MODEL_PROVIDER = os.getenv("MODEL_PROVIDER", "bedrock").lower()
 # ── Model selection ───────────────────────────────────────────────────────────
 # Haiku  → all 5 subagents (fast, cheap, focused single-domain tasks)
 # Sonnet → synthesis agent (complex conflict resolution + extended thinking)
-MODEL_FAST      = "claude-haiku-4-5"
-MODEL_REASONING = "claude-sonnet-4-6"
+MODEL_FAST      = "claude-haiku-5-5"
+MODEL_REASONING = "claude-sonnet-5-5"
 
 # Bedrock model IDs (used when MODEL_PROVIDER = "bedrock")
 # These are cross-region inference profile IDs, not raw model IDs — Bedrock
@@ -59,28 +59,54 @@ MODEL_REASONING = "claude-sonnet-4-6"
 # confirmed and fixed early in this project; the US profile has been
 # working correctly ever since via the Converse API path in
 # src/client/model_client.py.
+#
+# To roll back to the previous generation, swap these two lines for:
+#   BEDROCK_MODEL_FAST      = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+#   BEDROCK_MODEL_REASONING = "us.anthropic.claude-sonnet-4-6"
+# model_client.py detects the generation from the ID and sends the right
+# thinking settings for each, so nothing else needs to change.
+# Both can be overridden with environment variables of the same name.
 BEDROCK_MODEL_FAST = os.getenv(
     "BEDROCK_MODEL_FAST",
-    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "us.anthropic.claude-haiku-5-5",
 )
 BEDROCK_MODEL_REASONING = os.getenv(
     "BEDROCK_MODEL_REASONING",
-    "us.anthropic.claude-sonnet-4-6",
+    "us.anthropic.claude-sonnet-5-5",
 )
+# Two regions, because they can legitimately differ:
+#   BEDROCK_REGION        general AWS region. storage.py uses it for the
+#                         DynamoDB table. Set with AWS_REGION.
+#   BEDROCK_MODEL_REGION  where the AI model calls are sent. A Bedrock API
+#                         key belongs to the region it was created in, so
+#                         this must match that region. Set with
+#                         BEDROCK_MODEL_REGION; defaults to AWS_REGION.
 BEDROCK_REGION          = os.getenv("AWS_REGION", "us-east-1")
+BEDROCK_MODEL_REGION    = os.getenv("BEDROCK_MODEL_REGION") or BEDROCK_REGION
+
+# ── Bedrock authentication ────────────────────────────────────────────────────
+# Two ways to authenticate to Bedrock, and boto3 handles both on its own:
+#   1. A Bedrock API key in AWS_BEARER_TOKEN_BEDROCK (what this project uses).
+#   2. Classic IAM keys in AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
+#   3. No keys at all: an AWS profile locally, or an attached role when
+#      running on AWS (ECS / App Runner). This is the preferred setup.
+# Important: a Bedrock API key ONLY works for Bedrock. DynamoDB (the daily
+# cache in storage.py) needs IAM credentials (option 2 or 3).
+BEDROCK_API_KEY_SET = bool(os.getenv("AWS_BEARER_TOKEN_BEDROCK"))
+IAM_KEYS_SET = bool(os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"))
 
 # ── Subagent settings ─────────────────────────────────────────────────────────
 MAX_TOKENS_SUBAGENT   = 1500   # each subagent is focused — doesn't need much
-MAX_TOKENS_SYNTHESIS  = 3500   # reduced from 6000 — bull/bear case is now
-                                # bullet points, not paragraphs, so it needs
-                                # less room; generation time scales with
-                                # this number, so this is a direct latency cut
-THINKING_BUDGET       = 3000   # reduced from 4000 — a middle ground: still
-                                # a real latency cut, but keeps enough room
-                                # for genuine step-by-step conflict
-                                # resolution across all 5 signals rather
-                                # than risking shallower reasoning on the
-                                # one step where missing something matters most
+MAX_TOKENS_SYNTHESIS  = 8000   # On the 5.x models, thinking tokens count
+                                # toward this limit (it caps thinking + answer
+                                # together), so it needs real headroom or the
+                                # JSON answer gets cut off mid-way.
+SYNTHESIS_EFFORT      = "medium"  # 5.x models: how hard the synthesis agent
+                                # thinks. low | medium | high | xhigh | max.
+                                # Higher = better reasoning, slower, costlier.
+THINKING_BUDGET       = 3000   # Only used by 4.x models (rollback path).
+                                # The 5.x models reject a fixed budget and
+                                # use SYNTHESIS_EFFORT instead.
 
 # ── Data settings ─────────────────────────────────────────────────────────────
 PRICE_HISTORY_DAYS    = 600    # ~20 months — covers back to ~Jan 2025 for the
