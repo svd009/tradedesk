@@ -132,7 +132,7 @@ def init_db():
     _get_table()
 
 
-def _increment_counters(table, ticker: str, usage: dict = None):
+def _increment_counters(table, ticker: str):
     """
     Atomically bump two small counter rows: one global total, one for
     this specific ticker. DynamoDB's ADD on a numeric attribute creates
@@ -142,22 +142,10 @@ def _increment_counters(table, ticker: str, usage: dict = None):
     reading all of them back later is cheap.
     """
     try:
-        usage = usage or {}
-        cost = usage.get("estimated_cost_usd")
         table.update_item(
             Key={"ticker": _STATS_PARTITION, "window_sig": _TOTAL_COUNTER_SIG},
-            # Running totals of token usage and cost alongside the count.
-            # Cost is kept in millionths of a dollar, because DynamoDB
-            # counters must be whole numbers to add up exactly.
-            UpdateExpression="ADD analysis_count :incr, tokens_in :ti, "
-                             "tokens_out :to, cost_micro_usd :c, priced_count :p",
-            ExpressionAttributeValues={
-                ":incr": 1,
-                ":ti": int(usage.get("input_tokens", 0) or 0),
-                ":to": int(usage.get("output_tokens", 0) or 0),
-                ":c": int(round((cost or 0) * 1_000_000)),
-                ":p": 1 if cost is not None else 0,
-            },
+            UpdateExpression="ADD analysis_count :incr",
+            ExpressionAttributeValues={":incr": 1},
         )
         table.update_item(
             Key={"ticker": _STATS_PARTITION, "window_sig": f"TICKER#{ticker}"},
@@ -245,12 +233,7 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
             "result_json": result_json,
             "cached_at": cached_at.isoformat(),
         }
-        usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
         quality = result.get("quality") if isinstance(result.get("quality"), dict) else {}
-        item["tokens_in"] = int(usage.get("input_tokens", 0) or 0)
-        item["tokens_out"] = int(usage.get("output_tokens", 0) or 0)
-        if usage.get("estimated_cost_usd") is not None:
-            item["cost_usd"] = str(usage["estimated_cost_usd"])
         item["needs_review"] = bool(quality.get("needs_review", False))
         if baseline_price is not None:
             item["baseline_price"] = str(baseline_price)  # stored as a
@@ -258,7 +241,7 @@ def save_analysis(ticker: str, window_key: str, portfolio_sig: str,
                                                             # DynamoDB's Decimal-
                                                             # only Number typing
         table.put_item(Item=item)
-        _increment_counters(table, ticker, usage)
+        _increment_counters(table, ticker)
     except Exception as e:
         if FAIL_ON_STORAGE_ERROR:
             raise
@@ -355,25 +338,15 @@ def get_usage_stats() -> dict:
         items = response.get("Items", [])
 
         total = 0
-        totals_row = {}
         ticker_counts = []
         for item in items:
             if item["window_sig"] == _TOTAL_COUNTER_SIG:
                 total = int(item.get("analysis_count", 0))
-                totals_row = item
             elif item["window_sig"].startswith("TICKER#"):
                 ticker_counts.append((item.get("ticker_name", "?"), int(item.get("analysis_count", 0))))
 
         popular = sorted(ticker_counts, key=lambda x: -x[1])[:10]
-        return {
-            "total_analyses": total,
-            "most_popular": popular,
-            # Running totals since token tracking was added.
-            "tokens_in": int(totals_row.get("tokens_in", 0)),
-            "tokens_out": int(totals_row.get("tokens_out", 0)),
-            "cost_usd": int(totals_row.get("cost_micro_usd", 0)) / 1_000_000,
-            "priced_analyses": int(totals_row.get("priced_count", 0)),
-        }
+        return {"total_analyses": total, "most_popular": popular}
     except Exception as e:
         if FAIL_ON_STORAGE_ERROR:
             raise

@@ -143,8 +143,15 @@ class TradeDesk:
         if quality["needs_review"]:
             print(f"  [TradeDesk] ⚑ {ticker} flagged for review: {quality}")
 
+        # Token usage and cost are written to the server log only, for the
+        # developer. They are deliberately not stored in the database, not
+        # kept in the result, and never shown to visitors.
         usage = self._total_usage(clean_findings, synthesis_usages)
         cost = usage["estimated_cost_usd"]
+        for finding in clean_findings.values():
+            if isinstance(finding, dict):
+                finding.pop("_usage", None)
+        synthesis.pop("usage", None)
         print(f"  [TradeDesk] Usage for {ticker}: {usage['input_tokens']:,} in / "
               f"{usage['output_tokens']:,} out tokens, {usage['calls']} model calls, "
               f"cost {'$%.4f' % cost if cost is not None else 'not priced'}")
@@ -167,7 +174,6 @@ class TradeDesk:
             "subagent_findings": subagent_findings,
             "synthesis": synthesis,
             "quality": quality,
-            "usage": usage,
             "report": report,
             "report_path": report_path,
         }

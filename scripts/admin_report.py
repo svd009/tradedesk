@@ -1,8 +1,8 @@
 """
 admin_report.py
 ────────────────
-A private report for the developer: what the app has cost, and what users
-have flagged. Reads DynamoDB only; changes nothing.
+A private report for the developer: how much the app is used, and what the
+automatic checks and users have flagged. Reads DynamoDB only; changes nothing.
 
 Run from the project folder:
 
@@ -21,20 +21,11 @@ from src.orchestrator import storage  # noqa: E402
 
 def main():
     stats = storage.get_usage_stats()
-    total = stats.get("total_analyses", 0)
-    priced = stats.get("priced_analyses", 0)
-    cost = stats.get("cost_usd", 0.0)
 
     print("\n== Usage ==")
-    print(f"Fresh analyses run      : {total}")
-    print(f"Tokens in / out         : {stats.get('tokens_in', 0):,} / {stats.get('tokens_out', 0):,}")
-    print(f"Total AI cost (tracked) : ${cost:,.4f} across {priced} priced analyses")
-    if priced:
-        print(f"Average cost per search : ${cost / priced:,.4f}")
-    else:
-        print("Average cost per search : no priced analyses recorded yet")
+    print(f"Fresh analyses run : {stats.get('total_analyses', 0)}")
     if stats.get("most_popular"):
-        print("Most analysed           : " + ", ".join(f"{t} ({n})" for t, n in stats["most_popular"][:5]))
+        print("Most analysed      : " + ", ".join(f"{t} ({n})" for t, n in stats["most_popular"][:5]))
 
     flagged = [a for a in storage.get_flagged_analyses()]
     print(f"\n== Flagged by automatic checks ({len(flagged)}) ==")

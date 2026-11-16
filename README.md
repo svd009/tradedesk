@@ -60,7 +60,7 @@ flowchart TD
 | Research agents (5) | Claude Haiku 4.5 | Narrow, tool-using tasks, run in parallel with a 45-second budget |
 | Synthesis agent (1) | Claude Sonnet 4.6, extended thinking | Weighs the five findings and makes the call |
 | Orchestration | Python | Fixed steps in code; the models never choose the control flow |
-| Storage | Amazon DynamoDB | Cached analyses, usage and cost totals, screener rows, user reports |
+| Storage | Amazon DynamoDB | Cached analyses, usage counts, screener rows, user reports |
 | Front end | Streamlit | Pages, charts, forms |
 
 The design pattern is **orchestrator-workers** (fan out, then fan in). It is a workflow, not an autonomous agent: the code decides what runs and in what order, and the models do the reasoning inside each step.
@@ -132,15 +132,13 @@ Visitors can report a result through a "Something look wrong?" form under each a
 
 ---
 
-## Cost Tracking
-
-Token counts returned by Bedrock are recorded for every model call, summed per analysis, and stored with running totals in DynamoDB. A fresh analysis costs roughly $0.10 to $0.15; a cached one costs nothing in model spend.
+## Private Admin Report
 
 ```
 python scripts/admin_report.py
 ```
 
-prints total tokens, total cost, average cost per analysis, flagged results and user reports.
+prints how many analyses have run, the most analysed stocks, results flagged by the automatic checks, and reports sent by visitors. Token usage and estimated cost for each analysis are written to the server log only; they are not stored or shown in the app.
 
 ---
 
@@ -212,7 +210,7 @@ tradedesk/
 ├── check_bedrock.py                Pre-deploy check of models and table
 ├── Dockerfile
 ├── scripts/
-│   ├── admin_report.py             Cost, flagged results, user reports
+│   ├── admin_report.py             Usage, flagged results, user reports
 │   └── build_screener_snapshot.py  Daily Screener build (run by CI)
 └── src/
     ├── client/model_client.py      One interface for Bedrock or Anthropic
