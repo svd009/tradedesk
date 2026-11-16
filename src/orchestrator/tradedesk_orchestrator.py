@@ -154,7 +154,7 @@ class TradeDesk:
         synthesis.pop("usage", None)
         print(f"  [TradeDesk] Usage for {ticker}: {usage['input_tokens']:,} in / "
               f"{usage['output_tokens']:,} out tokens, {usage['calls']} model calls, "
-              f"cost {'$%.4f' % cost if cost is not None else 'not priced'}")
+              f"cost {'$%.4f' % cost if cost is not None else 'not priced'}", flush=True)
 
         # ── Step 4: Build and save full report ────────────────────
         report = self._build_report(ticker, company_name, sector,
