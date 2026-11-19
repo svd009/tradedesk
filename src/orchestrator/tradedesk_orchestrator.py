@@ -158,7 +158,7 @@ class TradeDesk:
 
         # ── Step 4: Build and save full report ────────────────────
         report = self._build_report(ticker, company_name, sector,
-                                    subagent_findings, synthesis)
+                                    subagent_findings, synthesis) 
         report_path = self._save_report(report)
 
         if verbose:

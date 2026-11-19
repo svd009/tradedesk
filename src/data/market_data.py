@@ -315,7 +315,11 @@ def _fetch_fundamentals(ticker: str) -> dict:
             "current_ratio": info.get("currentRatio"),
             "free_cash_flow_b": round(info.get("freeCashflow", 0) / 1e9, 2)
                                 if info.get("freeCashflow") else None,
-            "dividend_yield": info.get("dividendYield"),
+            "dividend_yield": (
+                info["dividendRate"] / (info.get("currentPrice") or info.get("regularMarketPrice"))
+                if info.get("dividendRate") and (info.get("currentPrice") or info.get("regularMarketPrice"))
+                else info.get("trailingAnnualDividendYield")
+            ),
             "beta": info.get("beta"),
             "analyst_target_price": info.get("targetMeanPrice"),
             "analyst_recommendation": info.get("recommendationKey"),
